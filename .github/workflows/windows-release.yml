@@ -9,6 +9,7 @@ on:
     paths:
       - 'stage140_transport_release/**'
       - 'tools/reassemble_stage140.py'
+      - 'tools/apply_runtime_hotfix.py'
       - '.github/workflows/windows-release.yml'
   pull_request:
     branches:
@@ -43,6 +44,9 @@ jobs:
           echo "PROJECT_DIR=$GITHUB_WORKSPACE/stage140-src/${STAGE140_PROJECT_DIRNAME}" >> "$GITHUB_ENV"
           echo "${STAGE140_ARCHIVE_SHA256}  Stage140000-CLOUD-V5.tar.xz" | sha256sum -c -
 
+      - name: Apply installed-runtime localhost hotfix R1
+        run: python3 tools/apply_runtime_hotfix.py "$PROJECT_DIR"
+
       - name: Install Linux QA dependencies
         run: |
           sudo apt-get update
@@ -67,7 +71,7 @@ jobs:
     name: Windows build + self-test + Visual QA + installer
     needs: source-audit
     runs-on: windows-2022
-    timeout-minutes: 90
+    timeout-minutes: 95
     env:
       WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
@@ -98,6 +102,12 @@ jobs:
           $actual = (Get-FileHash "Stage140000-CLOUD-V5.tar.xz" -Algorithm SHA256).Hash.ToLower()
           if ($actual -ne $env:STAGE140_ARCHIVE_SHA256) { throw "Archive SHA256 mismatch: $actual" }
           Write-Host "WINDOWS_TRANSPORT_SHA256_PASS $actual"
+
+      - name: Apply installed-runtime localhost hotfix R1
+        shell: pwsh
+        run: |
+          python tools/apply_runtime_hotfix.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Runtime hotfix failed: $LASTEXITCODE" }
 
       - name: Install Inno Setup
         shell: pwsh
@@ -148,6 +158,51 @@ jobs:
           Write-Host 'PACKAGE_RELEASE_SCALAR_FIX_APPLIED'
           & $script
 
+      - name: Installed application startup smoke test
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:PROJECT_DIR 'cloud-output\FG-Machines-Car-Setup.exe'
+          if (!(Test-Path $setup)) { throw 'Installer missing before installed-runtime smoke test' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'FGMachinesCar-Installed-Runtime-Smoke'
+          if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+          $args = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',"/DIR=$installDir")
+          $install = Start-Process -FilePath $setup -ArgumentList $args -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Silent installer failed: $($install.ExitCode)" }
+          $installedExe = Join-Path $installDir 'FG-Machines-Car.exe'
+          if (!(Test-Path $installedExe)) { throw 'Installed FG-Machines-Car.exe missing' }
+          if (!(Test-Path (Join-Path $installDir 'ui\index.html'))) { throw 'Installed UI payload missing' }
+
+          $env:FG_UI_HEADLESS = '1'
+          $env:FG_UI_PORT = '43901'
+          $env:FG_UI_MAX_RUNTIME_SECONDS = '12'
+          $app = Start-Process -FilePath $installedExe -PassThru
+          $base = 'http://127.0.0.1:43901/api/status'
+          $first = $null
+          for ($i=0; $i -lt 80; $i++) {
+            try {
+              $first = Invoke-RestMethod -Uri $base -TimeoutSec 1
+              if ($first.stage -eq 140000 -and $first.modules -eq 159 -and $first.readOnly -eq $true) { break }
+            } catch {}
+            Start-Sleep -Milliseconds 250
+          }
+          if ($null -eq $first -or $first.stage -ne 140000 -or $first.modules -ne 159 -or $first.readOnly -ne $true) {
+            if (!$app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
+            throw 'INSTALLED_RUNTIME_FIRST_PROBE_FAILED'
+          }
+          Start-Sleep -Seconds 5
+          try { $second = Invoke-RestMethod -Uri $base -TimeoutSec 2 } catch { $second = $null }
+          if ($null -eq $second -or $second.stage -ne 140000 -or $second.modules -ne 159) {
+            if (!$app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
+            throw 'INSTALLED_RUNTIME_PERSISTENCE_PROBE_FAILED'
+          }
+          Write-Host 'INSTALLED_RUNTIME_SMOKE_PASS firstProbe=true persistenceProbe=true localhostAlive=true'
+          if (!$app.HasExited) {
+            try { Wait-Process -Id $app.Id -Timeout 20 } catch { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
+          }
+          Remove-Item Env:FG_UI_HEADLESS -ErrorAction SilentlyContinue
+          Remove-Item Env:FG_UI_PORT -ErrorAction SilentlyContinue
+          Remove-Item Env:FG_UI_MAX_RUNTIME_SECONDS -ErrorAction SilentlyContinue
+
       - name: Normalize hardware validation to maintainer handoff
         shell: pwsh
         run: |
@@ -163,6 +218,8 @@ jobs:
           # FG Machines Car — Hardware Validation Handoff
 
           Status: HANDOFF_TO_PROJECT_MAINTAINER
+          Runtime hotfix: Stage140000-RUNTIME-HOTFIX-R1
+          Installed localhost startup smoke: PASS required for release
 
           The software release gates are automated and verified in CI. The following physical-hardware validation items are explicitly transferred to the next project maintainer for continuation:
 
@@ -191,7 +248,7 @@ jobs:
       - name: Upload Stage 140000 Windows release
         uses: actions/upload-artifact@v4
         with:
-          name: FG-Machines-Car-Windows-x64-Stage140000
+          name: FG-Machines-Car-Windows-x64-Stage140000-Runtime-Hotfix-R1
           path: |
             ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Setup.exe
             ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Stage140000-Screenshot.png
