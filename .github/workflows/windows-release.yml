@@ -118,20 +118,18 @@ jobs:
           npm install --no-audit --no-fund
           npx playwright install chromium
 
-      - name: Start native QA server
-        shell: pwsh
-        run: '& "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start'
-
-      - name: Playwright Visual QA
+      - name: Playwright Visual QA against native server
         shell: pwsh
         run: |
-          Set-Location "$env:PROJECT_DIR\qa\visual"
-          npx playwright test
-
-      - name: Stop native QA server
-        if: always()
-        shell: pwsh
-        run: '& "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop'
+          & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start
+          try {
+            Set-Location "$env:PROJECT_DIR\qa\visual"
+            npx playwright test
+            if ($LASTEXITCODE -ne 0) { throw "Playwright Visual QA failed: $LASTEXITCODE" }
+          }
+          finally {
+            & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop
+          }
 
       - name: Package Inno Setup release
         shell: pwsh
