@@ -1,0 +1,166 @@
+name: FG Machines Car Stage 140000 Windows Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - stage140-cloud-release-v3-finalize
+    paths:
+      - 'stage140_transport_release/**'
+      - 'tools/reassemble_stage140.py'
+      - '.github/workflows/windows-release.yml'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fg-machines-car-stage140000-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  STAGE140_ARCHIVE_SHA256: 11448329307471388b7d49545900c8472055db18f6e4ed495f328108252898cc
+  STAGE140_PROJECT_DIRNAME: FG-Machines-Car-Stage140000-CLOUD-RELEASE
+
+jobs:
+  source-audit:
+    name: Source integrity + Linux release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reassemble and verify Stage 140000 transport
+        run: |
+          python3 tools/reassemble_stage140.py \
+            --parts-dir stage140_transport_release \
+            --archive Stage140000-CLOUD-V5.tar.xz \
+            --extract-dir stage140-src
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE/stage140-src/${STAGE140_PROJECT_DIRNAME}" >> "$GITHUB_ENV"
+          echo "${STAGE140_ARCHIVE_SHA256}  Stage140000-CLOUD-V5.tar.xz" | sha256sum -c -
+
+      - name: Install Linux QA dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libssl-dev libsqlite3-dev
+
+      - name: Function integrity audit
+        run: python3 "$PROJECT_DIR/qa/function-audit.py"
+
+      - name: Configure Linux core QA
+        working-directory: ${{ env.PROJECT_DIR }}/native
+        run: cmake --preset linux-core-qa --fresh
+
+      - name: Build Linux core QA
+        working-directory: ${{ env.PROJECT_DIR }}/native
+        run: cmake --build --preset linux-core-qa --parallel 4
+
+      - name: Run 40 native tests on Linux
+        working-directory: ${{ env.PROJECT_DIR }}/native
+        run: ctest --preset linux-core-qa --output-on-failure --parallel 4
+
+  windows-release:
+    name: Windows build + self-test + Visual QA + installer
+    needs: source-audit
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reassemble and verify Stage 140000 transport
+        shell: pwsh
+        run: |
+          python tools/reassemble_stage140.py `
+            --parts-dir stage140_transport_release `
+            --archive Stage140000-CLOUD-V5.tar.xz `
+            --extract-dir stage140-src
+          if ($LASTEXITCODE -ne 0) { throw "Transport gate failed: $LASTEXITCODE" }
+          $projectDir = Join-Path $env:GITHUB_WORKSPACE "stage140-src\$env:STAGE140_PROJECT_DIRNAME"
+          "PROJECT_DIR=$projectDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $actual = (Get-FileHash "Stage140000-CLOUD-V5.tar.xz" -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $env:STAGE140_ARCHIVE_SHA256) { throw "Archive SHA256 mismatch: $actual" }
+          Write-Host "WINDOWS_TRANSPORT_SHA256_PASS $actual"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Prepare pinned vcpkg
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\prepare-vcpkg.ps1"'
+
+      - name: Windows build + 40 tests + self-test
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\build-and-test.ps1"'
+
+      - name: Install Visual QA dependencies
+        shell: pwsh
+        run: |
+          Set-Location "$env:PROJECT_DIR\qa\visual"
+          npm install --no-audit --no-fund
+          npx playwright install chromium
+
+      - name: Start native QA server
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start'
+
+      - name: Playwright Visual QA
+        shell: pwsh
+        run: |
+          Set-Location "$env:PROJECT_DIR\qa\visual"
+          npx playwright test
+
+      - name: Stop native QA server
+        if: always()
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop'
+
+      - name: Package Inno Setup release
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\package-release.ps1"'
+
+      - name: Optional Authenticode signing
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\sign-release.ps1"'
+
+      - name: Refresh final installer SHA256 after signing
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:PROJECT_DIR 'cloud-output'
+          $installer = Join-Path $out 'FG-Machines-Car-Setup.exe'
+          if (!(Test-Path $installer)) { throw 'Final installer missing' }
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+          "$hash  FG-Machines-Car-Setup.exe" | Set-Content (Join-Path $out 'SHA256SUMS.txt') -Encoding ascii
+          Write-Host "FINAL_INSTALLER_SHA256=$hash"
+
+      - name: Upload Stage 140000 Windows release
+        uses: actions/upload-artifact@v4
+        with:
+          name: FG-Machines-Car-Windows-x64-Stage140000
+          path: |
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Setup.exe
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Stage140000-Screenshot.png
+            ${{ env.PROJECT_DIR }}/cloud-output/visual-qa-screenshots.zip
+            ${{ env.PROJECT_DIR }}/cloud-output/release-metadata.json
+            ${{ env.PROJECT_DIR }}/cloud-output/SHA256SUMS.txt
+            ${{ env.PROJECT_DIR }}/qa/visual/test-results/junit.xml
+          if-no-files-found: error
+          retention-days: 14
