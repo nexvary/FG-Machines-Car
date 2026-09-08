@@ -136,10 +136,14 @@ jobs:
         run: |
           $script = Join-Path $env:PROJECT_DIR 'build\cloud\package-release.ps1'
           $text = Get-Content $script -Raw
-          $old = '$isccCandidates.Count'
-          $new = '@($isccCandidates).Count'
-          if (-not $text.Contains($old)) { throw 'Expected ISCC candidate enumeration expression was not found' }
-          $text = $text.Replace($old, $new)
+          $oldCount = '$isccCandidates.Count'
+          $newCount = '@($isccCandidates).Count'
+          $oldIndex = '$isccCandidates[0]'
+          $newIndex = '@($isccCandidates)[0]'
+          if (-not $text.Contains($oldCount)) { throw 'Expected ISCC candidate count expression was not found' }
+          if (-not $text.Contains($oldIndex)) { throw 'Expected ISCC candidate index expression was not found' }
+          $text = $text.Replace($oldCount, $newCount)
+          $text = $text.Replace($oldIndex, $newIndex)
           Set-Content -Path $script -Value $text -Encoding utf8
           Write-Host 'PACKAGE_RELEASE_SCALAR_FIX_APPLIED'
           & $script
