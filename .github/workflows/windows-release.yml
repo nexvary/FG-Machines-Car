@@ -133,7 +133,16 @@ jobs:
 
       - name: Package Inno Setup release
         shell: pwsh
-        run: '& "$env:PROJECT_DIR\build\cloud\package-release.ps1"'
+        run: |
+          $script = Join-Path $env:PROJECT_DIR 'build\cloud\package-release.ps1'
+          $text = Get-Content $script -Raw
+          $old = '$isccCandidates.Count'
+          $new = '@($isccCandidates).Count'
+          if (-not $text.Contains($old)) { throw 'Expected ISCC candidate enumeration expression was not found' }
+          $text = $text.Replace($old, $new)
+          Set-Content -Path $script -Value $text -Encoding utf8
+          Write-Host 'PACKAGE_RELEASE_SCALAR_FIX_APPLIED'
+          & $script
 
       - name: Normalize hardware validation to maintainer handoff
         shell: pwsh
