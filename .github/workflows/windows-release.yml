@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: fg-machines-car-stage140000-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   STAGE140_ARCHIVE_SHA256: 11448329307471388b7d49545900c8472055db18f6e4ed495f328108252898cc
