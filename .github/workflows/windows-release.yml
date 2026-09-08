@@ -66,7 +66,7 @@ jobs:
   windows-release:
     name: Windows build + self-test + Visual QA + installer
     needs: source-audit
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 90
     env:
       WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
