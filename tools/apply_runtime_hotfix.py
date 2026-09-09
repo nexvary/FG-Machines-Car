@@ -119,11 +119,13 @@ cpp.write_text(s, encoding='utf-8')
 
 s = js.read_text(encoding='utf-8')
 needle = "  window.fgManifest=manifest;\n})();\n"
-insert = "  const fgHeartbeat=()=>fetch('/api/ping',{cache:'no-store'}).catch(()=>{});\n  fgHeartbeat();\n  setInterval(fgHeartbeat,2000);\n  window.fgManifest=manifest;\n})();\n"
+insert = "  const fgHeartbeat=()=>fetch('/api/ping',{cache:'no-store',keepalive:true}).catch(()=>{});\n  fgHeartbeat();\n  setInterval(fgHeartbeat,2000);\n  window.fgManifest=manifest;\n})();\n"
 if 'const fgHeartbeat=' not in s:
     if needle not in s:
         raise SystemExit('HOTFIX_JS_ANCHOR_NOT_FOUND')
     s = s.replace(needle, insert, 1)
+else:
+    s = s.replace("fetch('/api/ping',{cache:'no-store'})", "fetch('/api/ping',{cache:'no-store',keepalive:true})")
 js.write_text(s, encoding='utf-8')
 
-print('RUNTIME_HOTFIX_APPLIED release=Stage140000-RUNTIME-HOTFIX-R1 heartbeat=true edgeLauncherDetached=true')
+print('RUNTIME_HOTFIX_APPLIED release=Stage140000-RUNTIME-HOTFIX-R2 heartbeat=true keepalive=true edgeLauncherDetached=true')
