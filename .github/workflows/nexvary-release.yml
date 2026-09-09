@@ -1,0 +1,243 @@
+name: Nexvary Stage 140000 Windows Clone Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/apply_nexvary_rebrand.py'
+      - '.github/workflows/nexvary-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexvary-stage140000-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  STAGE140_ARCHIVE_SHA256: 11448329307471388b7d49545900c8472055db18f6e4ed495f328108252898cc
+  STAGE140_PROJECT_DIRNAME: FG-Machines-Car-Stage140000-CLOUD-RELEASE
+
+jobs:
+  source-audit:
+    name: Nexvary source + brand + Linux gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reassemble verified Stage 140000 source
+        run: |
+          python3 tools/reassemble_stage140.py \
+            --parts-dir stage140_transport_release \
+            --archive Stage140000-CLOUD-V5.tar.xz \
+            --extract-dir stage140-src
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE/stage140-src/${STAGE140_PROJECT_DIRNAME}" >> "$GITHUB_ENV"
+          echo "${STAGE140_ARCHIVE_SHA256}  Stage140000-CLOUD-V5.tar.xz" | sha256sum -c -
+
+      - name: Apply installed-runtime localhost hotfix
+        run: python3 tools/apply_runtime_hotfix.py "$PROJECT_DIR"
+
+      - name: Apply semantic UI diversity hotfix
+        run: python3 tools/apply_ui_diversity_hotfix.py "$PROJECT_DIR"
+
+      - name: Clone identity to Nexvary and enforce zero legacy brand
+        run: python3 tools/apply_nexvary_rebrand.py "$PROJECT_DIR"
+
+      - name: Install Linux QA dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libssl-dev libsqlite3-dev
+
+      - name: Function integrity audit
+        run: python3 "$PROJECT_DIR/qa/function-audit.py"
+
+      - name: Configure Linux core QA
+        working-directory: ${{ env.PROJECT_DIR }}/native
+        run: cmake --preset linux-core-qa --fresh
+
+      - name: Build Linux core QA
+        working-directory: ${{ env.PROJECT_DIR }}/native
+        run: cmake --build --preset linux-core-qa --parallel 4
+
+      - name: Run 40 native tests on Linux
+        working-directory: ${{ env.PROJECT_DIR }}/native
+        run: ctest --preset linux-core-qa --output-on-failure --parallel 1
+
+  windows-release:
+    name: Nexvary Windows build + Visual QA + installer
+    needs: source-audit
+    runs-on: windows-2022
+    timeout-minutes: 100
+    env:
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reassemble verified Stage 140000 source
+        shell: pwsh
+        run: |
+          python tools/reassemble_stage140.py `
+            --parts-dir stage140_transport_release `
+            --archive Stage140000-CLOUD-V5.tar.xz `
+            --extract-dir stage140-src
+          if ($LASTEXITCODE -ne 0) { throw "Transport gate failed: $LASTEXITCODE" }
+          $projectDir = Join-Path $env:GITHUB_WORKSPACE "stage140-src\$env:STAGE140_PROJECT_DIRNAME"
+          "PROJECT_DIR=$projectDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $actual = (Get-FileHash "Stage140000-CLOUD-V5.tar.xz" -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $env:STAGE140_ARCHIVE_SHA256) { throw "Archive SHA256 mismatch: $actual" }
+
+      - name: Apply installed-runtime localhost hotfix
+        shell: pwsh
+        run: python tools/apply_runtime_hotfix.py "$env:PROJECT_DIR"
+
+      - name: Apply semantic UI diversity hotfix
+        shell: pwsh
+        run: python tools/apply_ui_diversity_hotfix.py "$env:PROJECT_DIR"
+
+      - name: Clone identity to Nexvary and enforce zero legacy brand
+        shell: pwsh
+        run: |
+          python tools/apply_nexvary_rebrand.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Nexvary rebrand gate failed: $LASTEXITCODE" }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Prepare pinned vcpkg
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\prepare-vcpkg.ps1"'
+
+      - name: Windows build + 40 tests + self-test
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\build-and-test.ps1"'
+
+      - name: Install Visual QA dependencies
+        shell: pwsh
+        run: |
+          Set-Location "$env:PROJECT_DIR\qa\visual"
+          npm install --no-audit --no-fund
+          npx playwright install chromium
+
+      - name: Playwright Visual QA against Nexvary native server
+        shell: pwsh
+        run: |
+          & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start
+          try {
+            Set-Location "$env:PROJECT_DIR\qa\visual"
+            npx playwright test
+            if ($LASTEXITCODE -ne 0) { throw "Playwright Visual QA failed: $LASTEXITCODE" }
+          }
+          finally {
+            & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop
+          }
+
+      - name: Package Nexvary Inno Setup release
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:PROJECT_DIR 'build\cloud\package-release.ps1'
+          $text = Get-Content $script -Raw
+          $text = $text.Replace('$isccCandidates.Count','@($isccCandidates).Count')
+          $text = $text.Replace('$isccCandidates[0]','@($isccCandidates)[0]')
+          Set-Content -Path $script -Value $text -Encoding utf8
+          & $script
+
+      - name: Installed Nexvary startup smoke test
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:PROJECT_DIR 'cloud-output\Nexvary-Setup.exe'
+          if (!(Test-Path $setup)) { throw 'Nexvary installer missing before smoke test' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'Nexvary-Installed-Runtime-Smoke'
+          if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+          $install = Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',"/DIR=$installDir") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Silent installer failed: $($install.ExitCode)" }
+          $installedExe = Join-Path $installDir 'Nexvary.exe'
+          if (!(Test-Path $installedExe)) { throw 'Installed Nexvary.exe missing' }
+          if (!(Test-Path (Join-Path $installDir 'ui\index.html'))) { throw 'Installed Nexvary UI payload missing' }
+          $env:FG_UI_HEADLESS='1'; $env:FG_UI_PORT='43911'; $env:FG_UI_MAX_RUNTIME_SECONDS='12'
+          $app=Start-Process -FilePath $installedExe -PassThru
+          $base='http://127.0.0.1:43911/api/status'; $status=$null
+          for($i=0;$i -lt 80;$i++){
+            try{$status=Invoke-RestMethod -Uri $base -TimeoutSec 1;if($status.stage -eq 140000 -and $status.modules -eq 159 -and $status.readOnly -eq $true){break}}catch{}
+            Start-Sleep -Milliseconds 250
+          }
+          if($null -eq $status -or $status.product -ne 'Nexvary'){if(!$app.HasExited){Stop-Process -Id $app.Id -Force};throw 'NEXVARY_INSTALLED_RUNTIME_IDENTITY_FAILED'}
+          Start-Sleep -Seconds 5
+          try{$second=Invoke-RestMethod -Uri $base -TimeoutSec 2}catch{$second=$null}
+          if($null -eq $second -or $second.product -ne 'Nexvary'){if(!$app.HasExited){Stop-Process -Id $app.Id -Force};throw 'NEXVARY_INSTALLED_RUNTIME_PERSISTENCE_FAILED'}
+          if(!$app.HasExited){try{Wait-Process -Id $app.Id -Timeout 20}catch{Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue}}
+          Write-Host 'NEXVARY_INSTALLED_RUNTIME_SMOKE_PASS product=Nexvary modules=159 localhostAlive=true'
+
+      - name: Final binary and installed payload brand audit
+        shell: pwsh
+        run: |
+          $targets=@((Join-Path $env:PROJECT_DIR 'cloud-output'),(Join-Path $env:RUNNER_TEMP 'Nexvary-Installed-Runtime-Smoke'))
+          $bad=@()
+          foreach($root in $targets){
+            Get-ChildItem -Path $root -Recurse -File | ForEach-Object {
+              if($_.Name -match '(?i)FG[-_ ]?Machines|FGMachines'){$bad += "PATH $($_.FullName)"}
+              $bytes=[System.IO.File]::ReadAllBytes($_.FullName)
+              $ascii=[System.Text.Encoding]::ASCII.GetString($bytes)
+              $utf16=[System.Text.Encoding]::Unicode.GetString($bytes)
+              if($ascii -match '(?i)FG Machines|FG-Machines|FGMachines' -or $utf16 -match '(?i)FG Machines|FG-Machines|FGMachines'){$bad += "CONTENT $($_.FullName)"}
+            }
+          }
+          if($bad.Count -gt 0){$bad | Select-Object -First 50 | Write-Host;throw "NEXVARY_FINAL_BRAND_AUDIT_FAIL count=$($bad.Count)"}
+          Write-Host 'NEXVARY_FINAL_BRAND_AUDIT_PASS forbiddenBrand=0'
+
+      - name: Create Nexvary handoff metadata
+        shell: pwsh
+        run: |
+          $out=Join-Path $env:PROJECT_DIR 'cloud-output'
+          @"
+          # Nexvary - Hardware Validation Handoff
+          Status: HANDOFF_TO_PROJECT_MAINTAINER
+          Software release gates: PASS required
+          Product identity: Nexvary
+          Legacy FG Machines branding: 0 allowed
+          Real VCI / vehicle / CGDI K2 physical validation is transferred to the receiving maintainer.
+          "@ | Set-Content -Path (Join-Path $out 'HARDWARE-HANDOFF.md') -Encoding utf8
+
+      - name: Optional Authenticode signing
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\sign-release.ps1"'
+
+      - name: Refresh Nexvary installer SHA256
+        shell: pwsh
+        run: |
+          $out=Join-Path $env:PROJECT_DIR 'cloud-output'; $installer=Join-Path $out 'Nexvary-Setup.exe'
+          if(!(Test-Path $installer)){throw 'Final Nexvary installer missing'}
+          $hash=(Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+          "$hash  Nexvary-Setup.exe" | Set-Content (Join-Path $out 'SHA256SUMS.txt') -Encoding ascii
+          Write-Host "NEXVARY_FINAL_INSTALLER_SHA256=$hash"
+
+      - name: Upload Nexvary Windows clone release
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexvary-Windows-x64-Stage140000
+          path: |
+            ${{ env.PROJECT_DIR }}/cloud-output/Nexvary-Setup.exe
+            ${{ env.PROJECT_DIR }}/cloud-output/Nexvary-Stage140000-Screenshot.png
+            ${{ env.PROJECT_DIR }}/cloud-output/visual-qa-screenshots.zip
+            ${{ env.PROJECT_DIR }}/cloud-output/release-metadata.json
+            ${{ env.PROJECT_DIR }}/cloud-output/HARDWARE-HANDOFF.md
+            ${{ env.PROJECT_DIR }}/cloud-output/SHA256SUMS.txt
+            ${{ env.PROJECT_DIR }}/qa/visual/test-results/junit.xml
+          if-no-files-found: error
+          retention-days: 14
