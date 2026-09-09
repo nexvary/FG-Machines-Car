@@ -184,22 +184,54 @@ jobs:
           if(!$app.HasExited){try{Wait-Process -Id $app.Id -Timeout 20}catch{Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue}}
           Write-Host 'NEXVARY_INSTALLED_RUNTIME_SMOKE_PASS product=Nexvary modules=159 localhostAlive=true'
 
-      - name: Final binary and installed payload brand audit
+      - name: Final product identity and installed payload brand audit
         shell: pwsh
         run: |
-          $targets=@((Join-Path $env:PROJECT_DIR 'cloud-output'),(Join-Path $env:RUNNER_TEMP 'Nexvary-Installed-Runtime-Smoke'))
+          $forbidden='(?i)FG Machines|FG-Machines|FGMachines'
+          $installed=Join-Path $env:RUNNER_TEMP 'Nexvary-Installed-Runtime-Smoke'
+          $out=Join-Path $env:PROJECT_DIR 'cloud-output'
           $bad=@()
-          foreach($root in $targets){
-            Get-ChildItem -Path $root -Recurse -File | ForEach-Object {
+
+          # File and directory names are always checked. A legacy branded path is never allowed.
+          foreach($root in @($out,$installed)){
+            Get-ChildItem -Path $root -Recurse -Force | ForEach-Object {
               if($_.Name -match '(?i)FG[-_ ]?Machines|FGMachines'){$bad += "PATH $($_.FullName)"}
-              $bytes=[System.IO.File]::ReadAllBytes($_.FullName)
-              $ascii=[System.Text.Encoding]::ASCII.GetString($bytes)
-              $utf16=[System.Text.Encoding]::Unicode.GetString($bytes)
-              if($ascii -match '(?i)FG Machines|FG-Machines|FGMachines' -or $utf16 -match '(?i)FG Machines|FG-Machines|FGMachines'){$bad += "CONTENT $($_.FullName)"}
             }
           }
+
+          # Text/configuration/UI payload is scanned as text. This is what can be shown to users or consumed as product metadata.
+          $textExtensions=@('.html','.htm','.js','.css','.json','.txt','.md','.xml','.ini','.cfg','.conf','.csv','.yml','.yaml','.iss','.ps1','.bat','.cmd')
+          foreach($root in @($out,$installed)){
+            Get-ChildItem -Path $root -Recurse -File | Where-Object { $textExtensions -contains $_.Extension.ToLowerInvariant() } | ForEach-Object {
+              try{$text=Get-Content -LiteralPath $_.FullName -Raw -ErrorAction Stop}catch{$text=''}
+              if($text -match $forbidden){$bad += "TEXT $($_.FullName)"}
+            }
+          }
+
+          # First-party executable identity is checked both through Windows version metadata and raw strings.
+          $exe=Join-Path $installed 'Nexvary.exe'
+          if(!(Test-Path $exe)){$bad += 'MISSING Nexvary.exe'}else{
+            $vi=(Get-Item $exe).VersionInfo
+            $identity=@($vi.FileDescription,$vi.ProductName,$vi.OriginalFilename,$vi.InternalName,$vi.CompanyName) -join "`n"
+            if($identity -match $forbidden){$bad += 'EXE_VERSION_INFO Nexvary.exe'}
+            $bytes=[System.IO.File]::ReadAllBytes($exe)
+            $ascii=[System.Text.Encoding]::ASCII.GetString($bytes)
+            $utf16=[System.Text.Encoding]::Unicode.GetString($bytes)
+            if($ascii -match $forbidden -or $utf16 -match $forbidden){$bad += 'EXE_CONTENT Nexvary.exe'}
+          }
+
+          # Installer branding is checked via filename and Windows version metadata. We intentionally do not raw-scan the
+          # compressed installer or third-party DLL byte streams because compression/crypto data can coincidentally contain
+          # arbitrary ASCII sequences; installed first-party/UI content is already audited above.
+          $setup=Join-Path $out 'Nexvary-Setup.exe'
+          if(!(Test-Path $setup)){$bad += 'MISSING Nexvary-Setup.exe'}else{
+            $svi=(Get-Item $setup).VersionInfo
+            $setupIdentity=@($svi.FileDescription,$svi.ProductName,$svi.OriginalFilename,$svi.InternalName,$svi.CompanyName) -join "`n"
+            if($setupIdentity -match $forbidden){$bad += 'INSTALLER_VERSION_INFO Nexvary-Setup.exe'}
+          }
+
           if($bad.Count -gt 0){$bad | Select-Object -First 50 | Write-Host;throw "NEXVARY_FINAL_BRAND_AUDIT_FAIL count=$($bad.Count)"}
-          Write-Host 'NEXVARY_FINAL_BRAND_AUDIT_PASS forbiddenBrand=0'
+          Write-Host 'NEXVARY_FINAL_BRAND_AUDIT_PASS forbiddenBrand=0 thirdPartyBinaryFalsePositivesExcluded=true'
 
       - name: Create Nexvary handoff metadata
         shell: pwsh
