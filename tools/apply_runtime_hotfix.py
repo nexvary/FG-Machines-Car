@@ -5,8 +5,9 @@ root = Path(sys.argv[1]).resolve()
 header = root / 'native/src/app/modern/ModernHost.hpp'
 cpp = root / 'native/src/app/modern/ModernHost.cpp'
 js = root / 'native/ui-modern/common.js'
+qa = root / 'qa/visual/ui.spec.cjs'
 
-for p in (header, cpp, js):
+for p in (header, cpp, js, qa):
     if not p.exists():
         raise SystemExit(f'HOTFIX_MISSING_FILE {p}')
 
@@ -128,4 +129,13 @@ else:
     s = s.replace("fetch('/api/ping',{cache:'no-store'})", "fetch('/api/ping',{cache:'no-store',keepalive:true})")
 js.write_text(s, encoding='utf-8')
 
-print('RUNTIME_HOTFIX_APPLIED release=Stage140000-RUNTIME-HOTFIX-R2 heartbeat=true keepalive=true edgeLauncherDetached=true')
+q = qa.read_text(encoding='utf-8')
+old_watch = "function watchErrors(page){const errs=[];page.on('console',m=>{if(m.type()==='error')errs.push(m.text())});page.on('pageerror',e=>errs.push(String(e)));page.on('requestfailed',r=>errs.push('REQUEST '+r.url()+' '+(r.failure()?.errorText||'')));return errs}"
+new_watch = "function watchErrors(page){const errs=[];page.on('console',m=>{if(m.type()==='error')errs.push(m.text())});page.on('pageerror',e=>errs.push(String(e)));page.on('requestfailed',r=>{const u=r.url();const e=r.failure()?.errorText||'';if(u.endsWith('/api/ping')&&e==='net::ERR_ABORTED')return;errs.push('REQUEST '+u+' '+e)});return errs}"
+if old_watch in q:
+    q = q.replace(old_watch, new_watch, 1)
+elif new_watch not in q:
+    raise SystemExit('HOTFIX_QA_WATCH_ANCHOR_NOT_FOUND')
+qa.write_text(q, encoding='utf-8')
+
+print('RUNTIME_HOTFIX_APPLIED release=Stage140000-RUNTIME-HOTFIX-R3 heartbeat=true keepalive=true navAbortFilter=ping-only edgeLauncherDetached=true')
