@@ -10,6 +10,7 @@ on:
       - 'stage140_transport_release/**'
       - 'tools/reassemble_stage140.py'
       - 'tools/apply_runtime_hotfix.py'
+      - 'tools/apply_ui_diversity_hotfix.py'
       - '.github/workflows/windows-release.yml'
   pull_request:
     branches:
@@ -46,6 +47,9 @@ jobs:
 
       - name: Apply installed-runtime localhost hotfix R1
         run: python3 tools/apply_runtime_hotfix.py "$PROJECT_DIR"
+
+      - name: Apply semantic UI diversity hotfix R1
+        run: python3 tools/apply_ui_diversity_hotfix.py "$PROJECT_DIR"
 
       - name: Install Linux QA dependencies
         run: |
@@ -108,6 +112,12 @@ jobs:
         run: |
           python tools/apply_runtime_hotfix.py "$env:PROJECT_DIR"
           if ($LASTEXITCODE -ne 0) { throw "Runtime hotfix failed: $LASTEXITCODE" }
+
+      - name: Apply semantic UI diversity hotfix R1
+        shell: pwsh
+        run: |
+          python tools/apply_ui_diversity_hotfix.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "UI diversity hotfix failed: $LASTEXITCODE" }
 
       - name: Install Inno Setup
         shell: pwsh
@@ -219,7 +229,9 @@ jobs:
 
           Status: HANDOFF_TO_PROJECT_MAINTAINER
           Runtime hotfix: Stage140000-RUNTIME-HOTFIX-R1
+          UI diversity hotfix: Stage140000-UI-DIVERSITY-R1
           Installed localhost startup smoke: PASS required for release
+          Semantic module diversity gate: PASS required for release
 
           The software release gates are automated and verified in CI. The following physical-hardware validation items are explicitly transferred to the next project maintainer for continuation:
 
@@ -248,7 +260,7 @@ jobs:
       - name: Upload Stage 140000 Windows release
         uses: actions/upload-artifact@v4
         with:
-          name: FG-Machines-Car-Windows-x64-Stage140000-Runtime-Hotfix-R1
+          name: FG-Machines-Car-Windows-x64-Stage140000-UI-Diversity-R1
           path: |
             ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Setup.exe
             ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Stage140000-Screenshot.png
