@@ -22,6 +22,8 @@ struct J2534Config {
     J2534Protocol protocol{J2534Protocol::Iso15765};
     std::uint32_t baud{500000};
     std::uint32_t connect_flags{0};
+    std::uint32_t tx_id{0x7E0};
+    std::uint32_t rx_id{0x7E8};
 };
 
 class J2534Vci final : public IVci {
