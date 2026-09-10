@@ -9,6 +9,7 @@ add_library(fg_prehardware_core
     src/virtual_vci.cpp
     src/uds.cpp
     src/coding.cpp
+    src/j2534.cpp
 )
 
 target_include_directories(fg_prehardware_core PUBLIC include)
