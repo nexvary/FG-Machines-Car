@@ -1,0 +1,222 @@
+name: FG Machines Car Windows Laptop Fit R1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stage141-prehardware-coding-core
+    paths:
+      - 'tools/apply_laptop_156_fit.py'
+      - 'tools/apply_royal_purple_ui.py'
+      - 'tools/apply_andalusian_luxe_ui.py'
+      - 'tools/apply_andalusian_structural_ui.py'
+      - '.github/workflows/windows-laptop-fit-release.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tools/apply_laptop_156_fit.py'
+      - '.github/workflows/windows-laptop-fit-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fg-windows-laptop-fit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  STAGE140_ARCHIVE_SHA256: 11448329307471388b7d49545900c8472055db18f6e4ed495f328108252898cc
+  STAGE140_PROJECT_DIRNAME: FG-Machines-Car-Stage140000-CLOUD-RELEASE
+
+jobs:
+  windows-laptop-fit:
+    name: Windows + 15.6-inch laptop fit + Installer + Visual QA
+    runs-on: windows-2022
+    timeout-minutes: 100
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reassemble and verify Stage 140000 source
+        shell: pwsh
+        run: |
+          python tools/reassemble_stage140.py `
+            --parts-dir stage140_transport_release `
+            --archive Stage140000-CLOUD-V5.tar.xz `
+            --extract-dir stage140-src
+          if ($LASTEXITCODE -ne 0) { throw "Transport reassembly failed: $LASTEXITCODE" }
+          $projectDir = Join-Path $env:GITHUB_WORKSPACE "stage140-src\$env:STAGE140_PROJECT_DIRNAME"
+          "PROJECT_DIR=$projectDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $actual = (Get-FileHash "Stage140000-CLOUD-V5.tar.xz" -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $env:STAGE140_ARCHIVE_SHA256) { throw "Archive SHA256 mismatch: $actual" }
+          Write-Host "WINDOWS_LAPTOP_SOURCE_SHA_PASS $actual"
+
+      - name: Apply runtime stability hotfix
+        shell: pwsh
+        run: |
+          python tools/apply_runtime_hotfix.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Runtime hotfix failed: $LASTEXITCODE" }
+
+      - name: Apply semantic UI and Andalusian V3
+        shell: pwsh
+        run: |
+          python tools/apply_ui_diversity_hotfix.py "$env:PROJECT_DIR"
+          python tools/apply_royal_purple_ui.py "$env:PROJECT_DIR"
+          python tools/apply_andalusian_luxe_ui.py "$env:PROJECT_DIR"
+          python tools/apply_andalusian_structural_ui.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Andalusian UI transformation failed: $LASTEXITCODE" }
+
+      - name: Apply 15.6-inch laptop fit layer
+        shell: pwsh
+        run: |
+          python tools/apply_laptop_156_fit.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Laptop fit transformation failed: $LASTEXITCODE" }
+          $css = Get-Content (Join-Path $env:PROJECT_DIR 'native\ui-modern\app.css') -Raw
+          if (-not $css.Contains('FG-LAPTOP-156-FIT-R1')) { throw 'Laptop fit marker missing' }
+          if (-not $css.Contains('max-height: calc(100vh - 54px)')) { throw '1366x768 compact viewport rule missing' }
+          Write-Host 'WINDOWS_LAPTOP_FIT_STATIC_GATE_PASS target=1366x768 scrollable_results=true'
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Prepare pinned vcpkg
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\prepare-vcpkg.ps1"'
+
+      - name: Build + 40 native tests + self-test
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\build-and-test.ps1"'
+
+      - name: Install Visual QA dependencies
+        shell: pwsh
+        run: |
+          Set-Location "$env:PROJECT_DIR\qa\visual"
+          npm install --no-audit --no-fund
+          npx playwright install chromium
+
+      - name: Playwright Visual QA
+        shell: pwsh
+        run: |
+          & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start
+          try {
+            Set-Location "$env:PROJECT_DIR\qa\visual"
+            npx playwright test
+            if ($LASTEXITCODE -ne 0) { throw "Playwright Visual QA failed: $LASTEXITCODE" }
+          }
+          finally {
+            & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop
+          }
+
+      - name: Validate Windows 15.6-inch viewport at 1366x768
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:PROJECT_DIR 'cloud-output'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start
+          try {
+            Set-Location "$env:PROJECT_DIR\qa\visual"
+            @'
+          const { chromium } = require('playwright');
+          const path = require('path');
+          (async()=>{
+            const out = process.env.FG_LAPTOP_OUT;
+            const browser = await chromium.launch({headless:true});
+            const page = await browser.newPage({viewport:{width:1366,height:768}});
+            await page.goto('http://127.0.0.1:43890/', {waitUntil:'networkidle'});
+            await page.screenshot({path:path.join(out,'FG-Machines-Car-Windows-Laptop-1366x768.png'),fullPage:false});
+            const fit = await page.evaluate(()=>({
+              vw: innerWidth, vh: innerHeight,
+              bodyW: document.body.scrollWidth,
+              bodyH: document.body.scrollHeight,
+              main: (()=>{const m=document.querySelector('main,.main-content,.content,.workspace-content,.page-content'); if(!m)return null; const s=getComputedStyle(m); return {clientHeight:m.clientHeight,scrollHeight:m.scrollHeight,overflowY:s.overflowY};})()
+            }));
+            console.log('WINDOWS_LAPTOP_HOME', JSON.stringify(fit));
+            if(fit.vw!==1366 || fit.vh!==768) throw new Error('Wrong viewport');
+            if(fit.bodyW > fit.vw + 4) throw new Error(`Horizontal clipping bodyW=${fit.bodyW} vw=${fit.vw}`);
+            if(!fit.main) throw new Error('Main content not found');
+            if(!['auto','scroll'].includes(fit.main.overflowY)) throw new Error(`Main is not scrollable: ${fit.main.overflowY}`);
+
+            const first = await page.locator('main a[href*="modules"], main a[href*="m0"], .module-card a, .card a').first();
+            if(await first.count()){
+              await first.click();
+              await page.waitForTimeout(600);
+            } else {
+              await page.goto('http://127.0.0.1:43890/modules/m001.html', {waitUntil:'networkidle'});
+            }
+            await page.screenshot({path:path.join(out,'FG-Machines-Car-Windows-Module-1366x768.png'),fullPage:false});
+            const moduleFit = await page.evaluate(()=>({vw:innerWidth,vh:innerHeight,bodyW:document.body.scrollWidth,bodyH:document.body.scrollHeight}));
+            console.log('WINDOWS_LAPTOP_MODULE', JSON.stringify(moduleFit));
+            if(moduleFit.bodyW > moduleFit.vw + 4) throw new Error('Module horizontal clipping');
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exit(1)});
+          '@ | Set-Content -Path windows-laptop-fit-check.cjs -Encoding utf8
+            $env:FG_LAPTOP_OUT = $out
+            node windows-laptop-fit-check.cjs
+            if ($LASTEXITCODE -ne 0) { throw "1366x768 laptop fit gate failed: $LASTEXITCODE" }
+          }
+          finally {
+            & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop
+          }
+
+      - name: Package Windows laptop-fit installer
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:PROJECT_DIR 'build\cloud\package-release.ps1'
+          $text = Get-Content $script -Raw
+          if ($text.Contains('$isccCandidates.Count')) { $text = $text.Replace('$isccCandidates.Count','@($isccCandidates).Count') }
+          if ($text.Contains('$isccCandidates[0]')) { $text = $text.Replace('$isccCandidates[0]','@($isccCandidates)[0]') }
+          Set-Content -Path $script -Value $text -Encoding utf8
+          & $script
+          if ($LASTEXITCODE -ne 0) { throw "Installer packaging failed: $LASTEXITCODE" }
+
+      - name: Verify Windows laptop-fit release
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:PROJECT_DIR 'cloud-output'
+          $setup = Join-Path $out 'FG-Machines-Car-Setup.exe'
+          $shot = Join-Path $out 'FG-Machines-Car-Windows-Laptop-1366x768.png'
+          $moduleShot = Join-Path $out 'FG-Machines-Car-Windows-Module-1366x768.png'
+          if (!(Test-Path $setup)) { throw 'Installer missing' }
+          if (!(Test-Path $shot)) { throw '1366x768 home screenshot missing' }
+          if (!(Test-Path $moduleShot)) { throw '1366x768 module screenshot missing' }
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+          "$hash  FG-Machines-Car-Setup.exe" | Set-Content (Join-Path $out 'WINDOWS-LAPTOP-FIT-SHA256SUMS.txt') -Encoding ascii
+          @"
+          FG Machines Car - Windows Laptop Fit R1
+          Target laptop viewport: 1366x768 PASS required
+          Main content internal scroll: enabled
+          Sidebar independent scroll: enabled
+          Andalusian Structural V3: enabled
+          Native tests: 40/40 PASS required
+          Playwright Visual QA: PASS required
+          Installer package: PASS required
+          Hardware/vehicle validation: not claimed
+          "@ | Set-Content (Join-Path $out 'WINDOWS-LAPTOP-FIT-RELEASE.txt') -Encoding utf8
+          Write-Host "WINDOWS_LAPTOP_INSTALLER_PASS SHA256=$hash"
+
+      - name: Upload Windows laptop-fit release
+        uses: actions/upload-artifact@v4
+        with:
+          name: FG-Machines-Car-Windows-Laptop-Fit-R1
+          path: |
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Setup.exe
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Windows-Laptop-1366x768.png
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Windows-Module-1366x768.png
+            ${{ env.PROJECT_DIR }}/cloud-output/visual-qa-screenshots.zip
+            ${{ env.PROJECT_DIR }}/cloud-output/WINDOWS-LAPTOP-FIT-RELEASE.txt
+            ${{ env.PROJECT_DIR }}/cloud-output/WINDOWS-LAPTOP-FIT-SHA256SUMS.txt
+            ${{ env.PROJECT_DIR }}/qa/visual/test-results/junit.xml
+          if-no-files-found: error
+          retention-days: 14
