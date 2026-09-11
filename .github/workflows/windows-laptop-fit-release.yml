@@ -134,7 +134,9 @@ jobs:
             const out = process.env.FG_LAPTOP_OUT;
             const browser = await chromium.launch({headless:true});
             const page = await browser.newPage({viewport:{width:1366,height:768}});
-            await page.goto('http://127.0.0.1:43890/', {waitUntil:'networkidle'});
+            await page.goto('http://127.0.0.1:43890/', {waitUntil:'domcontentloaded', timeout:30000});
+            await page.waitForSelector('body', {state:'visible', timeout:10000});
+            await page.waitForTimeout(1200);
             await page.screenshot({path:path.join(out,'FG-Machines-Car-Windows-Laptop-1366x768.png'),fullPage:false});
             const fit = await page.evaluate(()=>({
               vw: innerWidth, vh: innerHeight,
@@ -153,7 +155,9 @@ jobs:
               await first.click();
               await page.waitForTimeout(600);
             } else {
-              await page.goto('http://127.0.0.1:43890/modules/m001.html', {waitUntil:'networkidle'});
+              await page.goto('http://127.0.0.1:43890/modules/m001.html', {waitUntil:'domcontentloaded', timeout:30000});
+              await page.waitForSelector('body', {state:'visible', timeout:10000});
+              await page.waitForTimeout(600);
             }
             await page.screenshot({path:path.join(out,'FG-Machines-Car-Windows-Module-1366x768.png'),fullPage:false});
             const moduleFit = await page.evaluate(()=>({vw:innerWidth,vh:innerHeight,bodyW:document.body.scrollWidth,bodyH:document.body.scrollHeight}));
