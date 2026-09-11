@@ -1,4 +1,4 @@
-name: FG Machines Car Andalusian Luxe UI
+name: FG Machines Car Andalusian Structural UI V3
 
 on:
   workflow_dispatch:
@@ -8,6 +8,7 @@ on:
     paths:
       - 'tools/apply_royal_purple_ui.py'
       - 'tools/apply_andalusian_luxe_ui.py'
+      - 'tools/apply_andalusian_structural_ui.py'
       - '.github/workflows/royal-purple-ui-release.yml'
   pull_request:
     branches:
@@ -15,13 +16,14 @@ on:
     paths:
       - 'tools/apply_royal_purple_ui.py'
       - 'tools/apply_andalusian_luxe_ui.py'
+      - 'tools/apply_andalusian_structural_ui.py'
       - '.github/workflows/royal-purple-ui-release.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: fg-andalusian-luxe-ui-${{ github.ref }}
+  group: fg-andalusian-structural-v3-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -29,8 +31,8 @@ env:
   STAGE140_PROJECT_DIRNAME: FG-Machines-Car-Stage140000-CLOUD-RELEASE
 
 jobs:
-  royal-ui-windows:
-    name: Windows build + Andalusian Luxe UI + Visual QA
+  andalusian-v3-windows:
+    name: Windows build + structural Andalusian V3 + Visual QA
     runs-on: windows-2022
     timeout-minutes: 100
     steps:
@@ -59,7 +61,7 @@ jobs:
           "PROJECT_DIR=$projectDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $actual = (Get-FileHash "Stage140000-CLOUD-V5.tar.xz" -Algorithm SHA256).Hash.ToLower()
           if ($actual -ne $env:STAGE140_ARCHIVE_SHA256) { throw "Archive SHA256 mismatch: $actual" }
-          Write-Host "ANDALUSIAN_UI_SOURCE_SHA_PASS $actual"
+          Write-Host "ANDALUSIAN_V3_SOURCE_SHA_PASS $actual"
 
       - name: Apply runtime stability hotfix
         shell: pwsh
@@ -79,18 +81,22 @@ jobs:
           python tools/apply_royal_purple_ui.py "$env:PROJECT_DIR"
           if ($LASTEXITCODE -ne 0) { throw "Royal UI transformation failed: $LASTEXITCODE" }
 
-      - name: Apply Andalusian Luxe V2 ornate frames
+      - name: Apply Andalusian Luxe V2 base ornaments
         shell: pwsh
         run: |
           python tools/apply_andalusian_luxe_ui.py "$env:PROJECT_DIR"
-          if ($LASTEXITCODE -ne 0) { throw "Andalusian UI transformation failed: $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "Andalusian V2 transformation failed: $LASTEXITCODE" }
+
+      - name: Apply structural Andalusian V3 runtime frame engine
+        shell: pwsh
+        run: |
+          python tools/apply_andalusian_structural_ui.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Andalusian V3 transformation failed: $LASTEXITCODE" }
           $css = Get-Content (Join-Path $env:PROJECT_DIR 'native\ui-modern\app.css') -Raw
           $index = Get-Content (Join-Path $env:PROJECT_DIR 'native\ui-modern\index.html') -Raw
-          if (-not $css.Contains('FG-ROYAL-PURPLE-UI-V1')) { throw 'Royal UI CSS marker missing' }
-          if (-not $css.Contains('FG-ANDALUSIAN-LUXE-V2')) { throw 'Andalusian Luxe CSS marker missing' }
-          if (-not $index.Contains('fg-royal-purple')) { throw 'Royal UI body marker missing' }
-          if (-not $index.Contains('fg-andalusian-luxe')) { throw 'Andalusian Luxe body marker missing' }
-          Write-Host 'ANDALUSIAN_UI_STATIC_GATE_PASS theme=purple-pink gold=ornate moorish-arches=true routes=preserved'
+          if (-not $css.Contains('FG-ANDALUSIAN-STRUCTURAL-V3')) { throw 'Structural V3 CSS marker missing' }
+          if (-not $index.Contains('fg-andalusian-v3-runtime')) { throw 'Structural V3 runtime marker missing' }
+          Write-Host 'ANDALUSIAN_V3_STATIC_GATE_PASS runtime_frames=true structural=true routes=preserved'
 
       - name: Install Inno Setup
         shell: pwsh
@@ -111,7 +117,7 @@ jobs:
           npm install --no-audit --no-fund
           npx playwright install chromium
 
-      - name: Playwright Visual QA on real Andalusian interface
+      - name: Playwright Visual QA on real structural Andalusian interface
         shell: pwsh
         run: |
           & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start
@@ -139,38 +145,38 @@ jobs:
           & $script
           if ($LASTEXITCODE -ne 0) { throw "Installer packaging failed: $LASTEXITCODE" }
 
-      - name: Verify packaged theme and installer
+      - name: Verify packaged V3 theme and installer
         shell: pwsh
         run: |
           $out = Join-Path $env:PROJECT_DIR 'cloud-output'
           $setup = Join-Path $out 'FG-Machines-Car-Setup.exe'
           if (!(Test-Path $setup)) { throw 'Themed installer missing' }
           $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
-          "$hash  FG-Machines-Car-Setup.exe" | Set-Content (Join-Path $out 'ANDALUSIAN-LUXE-SHA256SUMS.txt') -Encoding ascii
+          "$hash  FG-Machines-Car-Setup.exe" | Set-Content (Join-Path $out 'ANDALUSIAN-V3-SHA256SUMS.txt') -Encoding ascii
           @"
-          FG Machines Car Andalusian Luxe UI V2
-          Purple/pink background: enabled
-          Royal gold ornate card frames: enabled
-          Andalusian corner ornaments: enabled
-          Moorish arch hero/VCI treatment: enabled
-          Ivory diagnostic cards: enabled
-          Dark plum navigation: enabled
+          FG Machines Car Andalusian Structural UI V3
+          Purple/pink royal background: enabled
+          Runtime-detected full ornate card frames: enabled
+          Four-corner Andalusian ornaments: enabled
+          Top/bottom central gold crests: enabled
+          Moorish hero arch treatment: enabled
+          Ornate sidebar and header rails: enabled
           Existing routes/actions: preserved
           Stage 140000 native tests: required PASS
           Playwright Visual QA: required PASS
-          "@ | Set-Content (Join-Path $out 'ANDALUSIAN-LUXE-RELEASE.txt') -Encoding utf8
-          Write-Host "ANDALUSIAN_UI_INSTALLER_PASS SHA256=$hash"
+          "@ | Set-Content (Join-Path $out 'ANDALUSIAN-V3-RELEASE.txt') -Encoding utf8
+          Write-Host "ANDALUSIAN_V3_INSTALLER_PASS SHA256=$hash"
 
-      - name: Upload Andalusian Luxe UI release
+      - name: Upload Andalusian Structural V3 release
         uses: actions/upload-artifact@v4
         with:
-          name: FG-Machines-Car-Andalusian-Luxe-UI-V2
+          name: FG-Machines-Car-Andalusian-Structural-UI-V3
           path: |
             ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Setup.exe
             ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Stage140000-Screenshot.png
             ${{ env.PROJECT_DIR }}/cloud-output/visual-qa-screenshots.zip
-            ${{ env.PROJECT_DIR }}/cloud-output/ANDALUSIAN-LUXE-RELEASE.txt
-            ${{ env.PROJECT_DIR }}/cloud-output/ANDALUSIAN-LUXE-SHA256SUMS.txt
+            ${{ env.PROJECT_DIR }}/cloud-output/ANDALUSIAN-V3-RELEASE.txt
+            ${{ env.PROJECT_DIR }}/cloud-output/ANDALUSIAN-V3-SHA256SUMS.txt
             ${{ env.PROJECT_DIR }}/qa/visual/test-results/junit.xml
           if-no-files-found: error
           retention-days: 14
