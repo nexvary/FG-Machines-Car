@@ -47,9 +47,13 @@ jobs:
         shell: bash
         run: |
           echo '=== CMAKE ==='
-          sed -n '1,260p' "$PROJECT_DIR/native/CMakeLists.txt" || true
-          echo '=== SOURCE TREE ==='
-          find "$PROJECT_DIR/native/src" -maxdepth 5 -type f | sort
+          sed -n '1,420p' "$PROJECT_DIR/native/CMakeLists.txt" || true
+          echo '=== MODERN HOST HPP ==='
+          sed -n '1,260p' "$PROJECT_DIR/native/src/app/modern/ModernHost.hpp" || true
+          echo '=== MODERN HOST CPP ==='
+          sed -n '1,340p' "$PROJECT_DIR/native/src/app/modern/ModernHost.cpp" || true
+          echo '=== MODERN MAIN ==='
+          cat "$PROJECT_DIR/native/src/app/modern/main.cpp" || true
           echo '=== WINDOWS API REFERENCES ==='
           grep -RInE '#include <windows.h>|#include <winsock|WinMain|MessageBoxW|CreateProcessW|SOCKET|closesocket|WSAStartup|GetModuleFileNameW|_wgetenv|LocalFree|ShellExecute' "$PROJECT_DIR/native" || true
       - name: Ubuntu configure probe
