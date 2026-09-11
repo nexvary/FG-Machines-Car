@@ -1,0 +1,77 @@
+name: FG Machines Car Ubuntu 24.04 Port Probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stage141-prehardware-coding-core
+    paths:
+      - '.github/workflows/ubuntu24-port-probe.yml'
+      - 'tools/apply_ubuntu24_port.py'
+      - 'tools/apply_royal_purple_ui.py'
+      - 'tools/apply_andalusian_luxe_ui.py'
+      - 'tools/apply_andalusian_structural_ui.py'
+
+permissions:
+  contents: read
+
+env:
+  STAGE140_ARCHIVE_SHA256: 11448329307471388b7d49545900c8472055db18f6e4ed495f328108252898cc
+  STAGE140_PROJECT_DIRNAME: FG-Machines-Car-Stage140000-CLOUD-RELEASE
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reassemble source
+        shell: bash
+        run: |
+          python3 tools/reassemble_stage140.py \
+            --parts-dir stage140_transport_release \
+            --archive Stage140000-CLOUD-V5.tar.xz \
+            --extract-dir stage140-src
+          actual=$(sha256sum Stage140000-CLOUD-V5.tar.xz | awk '{print $1}')
+          test "$actual" = "$STAGE140_ARCHIVE_SHA256"
+          PROJECT_DIR="$GITHUB_WORKSPACE/stage140-src/$STAGE140_PROJECT_DIRNAME"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      - name: Apply shared UI transforms
+        shell: bash
+        run: |
+          python3 tools/apply_ui_diversity_hotfix.py "$PROJECT_DIR"
+          python3 tools/apply_royal_purple_ui.py "$PROJECT_DIR"
+          python3 tools/apply_andalusian_luxe_ui.py "$PROJECT_DIR"
+          python3 tools/apply_andalusian_structural_ui.py "$PROJECT_DIR"
+      - name: Inspect native project
+        shell: bash
+        run: |
+          echo '=== CMAKE ==='
+          sed -n '1,260p' "$PROJECT_DIR/native/CMakeLists.txt" || true
+          echo '=== SOURCE TREE ==='
+          find "$PROJECT_DIR/native/src" -maxdepth 5 -type f | sort
+          echo '=== WINDOWS API REFERENCES ==='
+          grep -RInE '#include <windows.h>|#include <winsock|WinMain|MessageBoxW|CreateProcessW|SOCKET|closesocket|WSAStartup|GetModuleFileNameW|_wgetenv|LocalFree|ShellExecute' "$PROJECT_DIR/native" || true
+      - name: Ubuntu configure probe
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++ pkg-config libsqlite3-dev libssl-dev
+          set +e
+          cmake -S "$PROJECT_DIR/native" -B "$PROJECT_DIR/native/build-ubuntu-probe" -G Ninja -DCMAKE_BUILD_TYPE=Release 2>&1 | tee ubuntu-configure.log
+          rc=${PIPESTATUS[0]}
+          echo "CONFIGURE_RC=$rc"
+          if [ $rc -eq 0 ]; then
+            cmake --build "$PROJECT_DIR/native/build-ubuntu-probe" --parallel 2 2>&1 | tee ubuntu-build.log
+            echo "BUILD_RC=${PIPESTATUS[0]}"
+          fi
+          exit 0
+      - name: Upload probe logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: FG-Ubuntu24-Port-Probe
+          path: |
+            ubuntu-configure.log
+            ubuntu-build.log
+          if-no-files-found: ignore
+          retention-days: 7
