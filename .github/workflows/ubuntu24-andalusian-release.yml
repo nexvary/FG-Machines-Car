@@ -1,4 +1,4 @@
-name: FG Machines Car Ubuntu 24.04 Andalusian V3
+name: FG Machines Car Ubuntu 24.04 Laptop Fit R1
 
 on:
   workflow_dispatch:
@@ -8,6 +8,7 @@ on:
     paths:
       - 'tools/apply_ubuntu24_port.py'
       - 'tools/apply_ubuntu24_branding.py'
+      - 'tools/apply_laptop_156_fit.py'
       - '.github/workflows/ubuntu24-andalusian-release.yml'
       - 'tools/apply_ui_diversity_hotfix.py'
       - 'tools/apply_royal_purple_ui.py'
@@ -19,23 +20,24 @@ on:
     paths:
       - 'tools/apply_ubuntu24_port.py'
       - 'tools/apply_ubuntu24_branding.py'
+      - 'tools/apply_laptop_156_fit.py'
       - '.github/workflows/ubuntu24-andalusian-release.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: fg-ubuntu24-andalusian-${{ github.ref }}
+  group: fg-ubuntu24-laptop-fit-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   STAGE140_ARCHIVE_SHA256: 11448329307471388b7d49545900c8472055db18f6e4ed495f328108252898cc
   STAGE140_PROJECT_DIRNAME: FG-Machines-Car-Stage140000-CLOUD-RELEASE
-  DEB_NAME: fg-machines-car_1.40.0-ubuntu24.2_amd64.deb
+  DEB_NAME: fg-machines-car_1.40.0-ubuntu24.3_amd64.deb
 
 jobs:
   ubuntu24:
-    name: Ubuntu 24.04 build + tests + DEB + Visual QA
+    name: Ubuntu 24.04 + 15.6-inch laptop fit + DEB + Visual QA
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     steps:
@@ -60,14 +62,16 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "UBUNTU24_SOURCE_SHA_PASS $actual"
 
-      - name: Apply semantic UI and Andalusian Structural V3
+      - name: Apply semantic UI, Andalusian V3 and laptop fit
         shell: bash
         run: |
           python3 tools/apply_ui_diversity_hotfix.py "$PROJECT_DIR"
           python3 tools/apply_royal_purple_ui.py "$PROJECT_DIR"
           python3 tools/apply_andalusian_luxe_ui.py "$PROJECT_DIR"
           python3 tools/apply_andalusian_structural_ui.py "$PROJECT_DIR"
+          python3 tools/apply_laptop_156_fit.py "$PROJECT_DIR"
           grep -q 'FG-ANDALUSIAN-STRUCTURAL-V3' "$PROJECT_DIR/native/ui-modern/app.css"
+          grep -q 'FG-LAPTOP-156-FIT-R1' "$PROJECT_DIR/native/ui-modern/app.css"
 
       - name: Apply Ubuntu 24.04 native modern host
         shell: bash
@@ -116,6 +120,7 @@ jobs:
           test -x "$BUILD_DIR/FG-Machines-Car"
           test -f "$BUILD_DIR/ui/index.html"
           grep -q 'Ubuntu 24.04 Native Core' "$BUILD_DIR/ui/index.html"
+          grep -q 'FG-LAPTOP-156-FIT-R1' "$BUILD_DIR/ui/app.css"
           echo 'UBUNTU24_NATIVE_BUILD_PASS'
 
       - name: Run native test suite
@@ -158,7 +163,68 @@ jobs:
           cd "$PROJECT_DIR/qa/visual"
           npx playwright test
 
-      - name: Capture real Ubuntu 24.04 screenshot
+      - name: Validate 15.6-inch laptop viewport at 1366x768
+        shell: bash
+        env:
+          FG_QA_URL: http://127.0.0.1:43890
+        run: |
+          cd "$PROJECT_DIR/qa/visual"
+          node <<'NODE'
+          const { chromium } = require('playwright');
+          const fs = require('fs');
+          const path = require('path');
+          (async()=>{
+            const browser = await chromium.launch({headless:true});
+            const pages = ['/', '/sections/diagnostics.html', '/modules/m001.html'];
+            for (const vp of [{width:1366,height:768,name:'1366x768'},{width:1920,height:1080,name:'1920x1080'}]) {
+              const page = await browser.newPage({viewport:{width:vp.width,height:vp.height}});
+              for (let i=0;i<pages.length;i++) {
+                const target = process.env.FG_QA_URL + pages[i];
+                await page.goto(target,{waitUntil:'networkidle'});
+                const m = await page.evaluate(()=>{
+                  const selectors=['main','.main-content','.workspace-content','.page-content','.content','[class*="main-content"]'];
+                  const main=selectors.map(s=>document.querySelector(s)).find(el=>el && el.getBoundingClientRect().width>300);
+                  const side=document.querySelector('.fg-v3-sidebar,aside,.sidebar,[class*="sidebar"]');
+                  if(!main) return {error:'main-not-found'};
+                  const r=main.getBoundingClientRect();
+                  const cs=getComputedStyle(main);
+                  const sideInfo=side?(()=>{const sr=side.getBoundingClientRect(),sc=getComputedStyle(side);return {top:sr.top,bottom:sr.bottom,clientHeight:side.clientHeight,scrollHeight:side.scrollHeight,overflowY:sc.overflowY};})():null;
+                  return {
+                    innerHeight:window.innerHeight,
+                    top:r.top,bottom:r.bottom,
+                    clientHeight:main.clientHeight,scrollHeight:main.scrollHeight,
+                    overflowY:cs.overflowY,
+                    bodyScroll:document.scrollingElement.scrollHeight,
+                    side:sideInfo
+                  };
+                });
+                if(m.error) throw new Error(`${vp.name} ${pages[i]} ${m.error}`);
+                const scrollable = m.scrollHeight <= m.clientHeight + 2 || ['auto','scroll'].includes(m.overflowY);
+                const withinViewport = m.bottom <= m.innerHeight + 2 && m.clientHeight <= (m.innerHeight - m.top + 2);
+                if(!scrollable || !withinViewport) throw new Error(`${vp.name} ${pages[i]} main overflow failure ${JSON.stringify(m)}`);
+                if(m.side){
+                  const sideScrollable=m.side.scrollHeight <= m.side.clientHeight + 2 || ['auto','scroll'].includes(m.side.overflowY);
+                  if(!sideScrollable || m.side.bottom > m.innerHeight + 2) throw new Error(`${vp.name} ${pages[i]} sidebar overflow failure ${JSON.stringify(m.side)}`);
+                }
+                if(vp.name==='1366x768' && i===0){
+                  const out=path.join(process.env.UBUNTU_OUT,'FG-Machines-Car-Ubuntu24-Laptop-1366x768.png');
+                  await page.screenshot({path:out,fullPage:false});
+                  if(!fs.existsSync(out)) throw new Error('1366 screenshot missing');
+                }
+                if(vp.name==='1366x768' && i===2){
+                  const out=path.join(process.env.UBUNTU_OUT,'FG-Machines-Car-Ubuntu24-Module-1366x768.png');
+                  await page.screenshot({path:out,fullPage:false});
+                  if(!fs.existsSync(out)) throw new Error('module screenshot missing');
+                }
+              }
+              await page.close();
+            }
+            await browser.close();
+            console.log('LAPTOP_156_VIEWPORT_QA_PASS 1366x768 + 1920x1080 results_reachable=true');
+          })().catch(e=>{console.error(e);process.exit(1);});
+          NODE
+
+      - name: Capture full Ubuntu 24.04 screenshot
         shell: bash
         run: |
           google-chrome --headless=new --disable-gpu --hide-scrollbars \
@@ -166,6 +232,8 @@ jobs:
             --screenshot="$UBUNTU_OUT/FG-Machines-Car-Ubuntu24-Andalusian-V3.png" \
             http://127.0.0.1:43890/
           test -s "$UBUNTU_OUT/FG-Machines-Car-Ubuntu24-Andalusian-V3.png"
+          test -s "$UBUNTU_OUT/FG-Machines-Car-Ubuntu24-Laptop-1366x768.png"
+          test -s "$UBUNTU_OUT/FG-Machines-Car-Ubuntu24-Module-1366x768.png"
 
       - name: Stop Ubuntu QA server
         if: always()
@@ -208,7 +276,7 @@ jobs:
           desktop-file-validate "$PKG/usr/share/applications/fg-machines-car.desktop"
           cat > "$PKG/DEBIAN/control" <<'EOF'
           Package: fg-machines-car
-          Version: 1.40.0-ubuntu24.2
+          Version: 1.40.0-ubuntu24.3
           Section: utils
           Priority: optional
           Architecture: amd64
@@ -216,7 +284,7 @@ jobs:
           Depends: libc6 (>= 2.39), libstdc++6, libssl3t64, libsqlite3-0
           Recommends: google-chrome-stable | chromium-browser
           Description: FG Machines Car automotive diagnostics workspace
-           Ubuntu 24.04 LTS build with the Andalusian Structural V3 interface.
+           Ubuntu 24.04 LTS build with Andalusian Structural V3 and 15.6-inch laptop fit.
            Current validated software scope remains READ ONLY diagnostics.
           EOF
           dpkg-deb --build --root-owner-group "$PKG" "$UBUNTU_OUT/$DEB_NAME"
@@ -232,6 +300,7 @@ jobs:
           test -x /opt/fg-machines-car/FG-Machines-Car
           test -f /opt/fg-machines-car/ui/index.html
           grep -q 'Ubuntu 24.04 Native Core' /opt/fg-machines-car/ui/index.html
+          grep -q 'FG-LAPTOP-156-FIT-R1' /opt/fg-machines-car/ui/app.css
           /opt/fg-machines-car/FG-Machines-Car --self-test
           command -v fg-machines-car
           echo 'UBUNTU24_DEB_INSTALL_SELFTEST_PASS'
@@ -240,32 +309,41 @@ jobs:
         shell: bash
         run: |
           cd "$UBUNTU_OUT"
-          sha256sum "$DEB_NAME" FG-Machines-Car-Ubuntu24-Andalusian-V3.png > SHA256SUMS.txt
+          sha256sum "$DEB_NAME" \
+            FG-Machines-Car-Ubuntu24-Andalusian-V3.png \
+            FG-Machines-Car-Ubuntu24-Laptop-1366x768.png \
+            FG-Machines-Car-Ubuntu24-Module-1366x768.png > SHA256SUMS.txt
           cat > RELEASE.txt <<'EOF'
-          FG Machines Car - Ubuntu 24.04 LTS - Andalusian Structural V3
-          Package revision: ubuntu24.2
+          FG Machines Car - Ubuntu 24.04 LTS - Laptop Fit R1
+          Package revision: ubuntu24.3
           Architecture: amd64
           Native core: C++20 POSIX/Linux
           UI host: Chrome/Chromium app mode
           UI: Royal Purple + Gold + Andalusian Structural V3
+          Responsive gate: 1366x768 and 1920x1080
+          Result panels: reachable via internal main-content scrolling
+          Sidebar: independent bounded scrolling
           UI branding: Ubuntu 24.04 Native Core
           Routes: preserved from Stage 140000
           Ubuntu native core build: PASS required
           Native CTest suite: 40/40 PASS required
           Modern UI self-test: PASS required
           Playwright Visual QA: 7/7 PASS required
+          15.6-inch viewport QA: PASS required
           DEB install self-test: PASS required
           Hardware/vehicle validation: not claimed
           Current software safety scope: READ ONLY diagnostics
           EOF
 
-      - name: Upload Ubuntu 24.04 release
+      - name: Upload Ubuntu 24.04 laptop-fit release
         uses: actions/upload-artifact@v4
         with:
-          name: FG-Machines-Car-Ubuntu24-Andalusian-V3-R2
+          name: FG-Machines-Car-Ubuntu24-Laptop-Fit-R1
           path: |
             ${{ env.UBUNTU_OUT }}/${{ env.DEB_NAME }}
             ${{ env.UBUNTU_OUT }}/FG-Machines-Car-Ubuntu24-Andalusian-V3.png
+            ${{ env.UBUNTU_OUT }}/FG-Machines-Car-Ubuntu24-Laptop-1366x768.png
+            ${{ env.UBUNTU_OUT }}/FG-Machines-Car-Ubuntu24-Module-1366x768.png
             ${{ env.UBUNTU_OUT }}/SHA256SUMS.txt
             ${{ env.UBUNTU_OUT }}/RELEASE.txt
             ${{ env.UBUNTU_OUT }}/ctest-ubuntu24.xml
