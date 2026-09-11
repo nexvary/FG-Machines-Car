@@ -1,4 +1,4 @@
-name: FG Machines Car Royal Purple UI
+name: FG Machines Car Andalusian Luxe UI
 
 on:
   workflow_dispatch:
@@ -7,19 +7,21 @@ on:
       - stage141-prehardware-coding-core
     paths:
       - 'tools/apply_royal_purple_ui.py'
+      - 'tools/apply_andalusian_luxe_ui.py'
       - '.github/workflows/royal-purple-ui-release.yml'
   pull_request:
     branches:
       - main
     paths:
       - 'tools/apply_royal_purple_ui.py'
+      - 'tools/apply_andalusian_luxe_ui.py'
       - '.github/workflows/royal-purple-ui-release.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: fg-royal-purple-ui-${{ github.ref }}
+  group: fg-andalusian-luxe-ui-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -28,7 +30,7 @@ env:
 
 jobs:
   royal-ui-windows:
-    name: Windows build + Royal UI + Visual QA
+    name: Windows build + Andalusian Luxe UI + Visual QA
     runs-on: windows-2022
     timeout-minutes: 100
     steps:
@@ -57,7 +59,7 @@ jobs:
           "PROJECT_DIR=$projectDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $actual = (Get-FileHash "Stage140000-CLOUD-V5.tar.xz" -Algorithm SHA256).Hash.ToLower()
           if ($actual -ne $env:STAGE140_ARCHIVE_SHA256) { throw "Archive SHA256 mismatch: $actual" }
-          Write-Host "ROYAL_UI_SOURCE_SHA_PASS $actual"
+          Write-Host "ANDALUSIAN_UI_SOURCE_SHA_PASS $actual"
 
       - name: Apply runtime stability hotfix
         shell: pwsh
@@ -71,16 +73,24 @@ jobs:
           python tools/apply_ui_diversity_hotfix.py "$env:PROJECT_DIR"
           if ($LASTEXITCODE -ne 0) { throw "UI structure hotfix failed: $LASTEXITCODE" }
 
-      - name: Apply Royal Purple and Gold interface
+      - name: Apply Royal Purple and Gold base interface
         shell: pwsh
         run: |
           python tools/apply_royal_purple_ui.py "$env:PROJECT_DIR"
           if ($LASTEXITCODE -ne 0) { throw "Royal UI transformation failed: $LASTEXITCODE" }
+
+      - name: Apply Andalusian Luxe V2 ornate frames
+        shell: pwsh
+        run: |
+          python tools/apply_andalusian_luxe_ui.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Andalusian UI transformation failed: $LASTEXITCODE" }
           $css = Get-Content (Join-Path $env:PROJECT_DIR 'native\ui-modern\app.css') -Raw
           $index = Get-Content (Join-Path $env:PROJECT_DIR 'native\ui-modern\index.html') -Raw
           if (-not $css.Contains('FG-ROYAL-PURPLE-UI-V1')) { throw 'Royal UI CSS marker missing' }
+          if (-not $css.Contains('FG-ANDALUSIAN-LUXE-V2')) { throw 'Andalusian Luxe CSS marker missing' }
           if (-not $index.Contains('fg-royal-purple')) { throw 'Royal UI body marker missing' }
-          Write-Host 'ROYAL_UI_STATIC_GATE_PASS theme=purple-pink gold=royal routes=preserved'
+          if (-not $index.Contains('fg-andalusian-luxe')) { throw 'Andalusian Luxe body marker missing' }
+          Write-Host 'ANDALUSIAN_UI_STATIC_GATE_PASS theme=purple-pink gold=ornate moorish-arches=true routes=preserved'
 
       - name: Install Inno Setup
         shell: pwsh
@@ -101,7 +111,7 @@ jobs:
           npm install --no-audit --no-fund
           npx playwright install chromium
 
-      - name: Playwright Visual QA on real transformed UI
+      - name: Playwright Visual QA on real Andalusian interface
         shell: pwsh
         run: |
           & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start
@@ -136,29 +146,31 @@ jobs:
           $setup = Join-Path $out 'FG-Machines-Car-Setup.exe'
           if (!(Test-Path $setup)) { throw 'Themed installer missing' }
           $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
-          "$hash  FG-Machines-Car-Setup.exe" | Set-Content (Join-Path $out 'ROYAL-UI-SHA256SUMS.txt') -Encoding ascii
+          "$hash  FG-Machines-Car-Setup.exe" | Set-Content (Join-Path $out 'ANDALUSIAN-LUXE-SHA256SUMS.txt') -Encoding ascii
           @"
-          FG Machines Car Royal Purple UI V1
+          FG Machines Car Andalusian Luxe UI V2
           Purple/pink background: enabled
-          Royal gold card frames: enabled
+          Royal gold ornate card frames: enabled
+          Andalusian corner ornaments: enabled
+          Moorish arch hero/VCI treatment: enabled
           Ivory diagnostic cards: enabled
           Dark plum navigation: enabled
           Existing routes/actions: preserved
           Stage 140000 native tests: required PASS
           Playwright Visual QA: required PASS
-          "@ | Set-Content (Join-Path $out 'ROYAL-UI-RELEASE.txt') -Encoding utf8
-          Write-Host "ROYAL_UI_INSTALLER_PASS SHA256=$hash"
+          "@ | Set-Content (Join-Path $out 'ANDALUSIAN-LUXE-RELEASE.txt') -Encoding utf8
+          Write-Host "ANDALUSIAN_UI_INSTALLER_PASS SHA256=$hash"
 
-      - name: Upload Royal Purple UI release
+      - name: Upload Andalusian Luxe UI release
         uses: actions/upload-artifact@v4
         with:
-          name: FG-Machines-Car-Royal-Purple-UI-V1
+          name: FG-Machines-Car-Andalusian-Luxe-UI-V2
           path: |
             ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Setup.exe
             ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Stage140000-Screenshot.png
             ${{ env.PROJECT_DIR }}/cloud-output/visual-qa-screenshots.zip
-            ${{ env.PROJECT_DIR }}/cloud-output/ROYAL-UI-RELEASE.txt
-            ${{ env.PROJECT_DIR }}/cloud-output/ROYAL-UI-SHA256SUMS.txt
+            ${{ env.PROJECT_DIR }}/cloud-output/ANDALUSIAN-LUXE-RELEASE.txt
+            ${{ env.PROJECT_DIR }}/cloud-output/ANDALUSIAN-LUXE-SHA256SUMS.txt
             ${{ env.PROJECT_DIR }}/qa/visual/test-results/junit.xml
           if-no-files-found: error
           retention-days: 14
