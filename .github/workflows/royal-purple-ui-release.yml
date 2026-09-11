@@ -1,0 +1,164 @@
+name: FG Machines Car Royal Purple UI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stage141-prehardware-coding-core
+    paths:
+      - 'tools/apply_royal_purple_ui.py'
+      - '.github/workflows/royal-purple-ui-release.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tools/apply_royal_purple_ui.py'
+      - '.github/workflows/royal-purple-ui-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fg-royal-purple-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  STAGE140_ARCHIVE_SHA256: 11448329307471388b7d49545900c8472055db18f6e4ed495f328108252898cc
+  STAGE140_PROJECT_DIRNAME: FG-Machines-Car-Stage140000-CLOUD-RELEASE
+
+jobs:
+  royal-ui-windows:
+    name: Windows build + Royal UI + Visual QA
+    runs-on: windows-2022
+    timeout-minutes: 100
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reassemble and verify Stage 140000 source
+        shell: pwsh
+        run: |
+          python tools/reassemble_stage140.py `
+            --parts-dir stage140_transport_release `
+            --archive Stage140000-CLOUD-V5.tar.xz `
+            --extract-dir stage140-src
+          if ($LASTEXITCODE -ne 0) { throw "Transport reassembly failed: $LASTEXITCODE" }
+          $projectDir = Join-Path $env:GITHUB_WORKSPACE "stage140-src\$env:STAGE140_PROJECT_DIRNAME"
+          "PROJECT_DIR=$projectDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $actual = (Get-FileHash "Stage140000-CLOUD-V5.tar.xz" -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $env:STAGE140_ARCHIVE_SHA256) { throw "Archive SHA256 mismatch: $actual" }
+          Write-Host "ROYAL_UI_SOURCE_SHA_PASS $actual"
+
+      - name: Apply runtime stability hotfix
+        shell: pwsh
+        run: |
+          python tools/apply_runtime_hotfix.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Runtime hotfix failed: $LASTEXITCODE" }
+
+      - name: Apply semantic UI structure hotfix
+        shell: pwsh
+        run: |
+          python tools/apply_ui_diversity_hotfix.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "UI structure hotfix failed: $LASTEXITCODE" }
+
+      - name: Apply Royal Purple and Gold interface
+        shell: pwsh
+        run: |
+          python tools/apply_royal_purple_ui.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Royal UI transformation failed: $LASTEXITCODE" }
+          $css = Get-Content (Join-Path $env:PROJECT_DIR 'native\ui-modern\app.css') -Raw
+          $index = Get-Content (Join-Path $env:PROJECT_DIR 'native\ui-modern\index.html') -Raw
+          if (-not $css.Contains('FG-ROYAL-PURPLE-UI-V1')) { throw 'Royal UI CSS marker missing' }
+          if (-not $index.Contains('fg-royal-purple')) { throw 'Royal UI body marker missing' }
+          Write-Host 'ROYAL_UI_STATIC_GATE_PASS theme=purple-pink gold=royal routes=preserved'
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Prepare pinned vcpkg
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\prepare-vcpkg.ps1"'
+
+      - name: Build + 40 native tests + self-test
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\build-and-test.ps1"'
+
+      - name: Install Visual QA dependencies
+        shell: pwsh
+        run: |
+          Set-Location "$env:PROJECT_DIR\qa\visual"
+          npm install --no-audit --no-fund
+          npx playwright install chromium
+
+      - name: Playwright Visual QA on real transformed UI
+        shell: pwsh
+        run: |
+          & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start
+          try {
+            Set-Location "$env:PROJECT_DIR\qa\visual"
+            npx playwright test
+            if ($LASTEXITCODE -ne 0) { throw "Playwright Visual QA failed: $LASTEXITCODE" }
+          }
+          finally {
+            & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop
+          }
+
+      - name: Package themed Windows installer
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:PROJECT_DIR 'build\cloud\package-release.ps1'
+          $text = Get-Content $script -Raw
+          if ($text.Contains('$isccCandidates.Count')) {
+            $text = $text.Replace('$isccCandidates.Count','@($isccCandidates).Count')
+          }
+          if ($text.Contains('$isccCandidates[0]')) {
+            $text = $text.Replace('$isccCandidates[0]','@($isccCandidates)[0]')
+          }
+          Set-Content -Path $script -Value $text -Encoding utf8
+          & $script
+          if ($LASTEXITCODE -ne 0) { throw "Installer packaging failed: $LASTEXITCODE" }
+
+      - name: Verify packaged theme and installer
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:PROJECT_DIR 'cloud-output'
+          $setup = Join-Path $out 'FG-Machines-Car-Setup.exe'
+          if (!(Test-Path $setup)) { throw 'Themed installer missing' }
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+          "$hash  FG-Machines-Car-Setup.exe" | Set-Content (Join-Path $out 'ROYAL-UI-SHA256SUMS.txt') -Encoding ascii
+          @"
+          FG Machines Car Royal Purple UI V1
+          Purple/pink background: enabled
+          Royal gold card frames: enabled
+          Ivory diagnostic cards: enabled
+          Dark plum navigation: enabled
+          Existing routes/actions: preserved
+          Stage 140000 native tests: required PASS
+          Playwright Visual QA: required PASS
+          "@ | Set-Content (Join-Path $out 'ROYAL-UI-RELEASE.txt') -Encoding utf8
+          Write-Host "ROYAL_UI_INSTALLER_PASS SHA256=$hash"
+
+      - name: Upload Royal Purple UI release
+        uses: actions/upload-artifact@v4
+        with:
+          name: FG-Machines-Car-Royal-Purple-UI-V1
+          path: |
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Setup.exe
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Stage140000-Screenshot.png
+            ${{ env.PROJECT_DIR }}/cloud-output/visual-qa-screenshots.zip
+            ${{ env.PROJECT_DIR }}/cloud-output/ROYAL-UI-RELEASE.txt
+            ${{ env.PROJECT_DIR }}/cloud-output/ROYAL-UI-SHA256SUMS.txt
+            ${{ env.PROJECT_DIR }}/qa/visual/test-results/junit.xml
+          if-no-files-found: error
+          retention-days: 14
