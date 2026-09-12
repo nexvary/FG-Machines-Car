@@ -119,6 +119,17 @@ jobs:
             & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop
           }
 
+      - name: Package Windows laptop-fit installer
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:PROJECT_DIR 'build\cloud\package-release.ps1'
+          $text = Get-Content $script -Raw
+          if ($text.Contains('$isccCandidates.Count')) { $text = $text.Replace('$isccCandidates.Count','@($isccCandidates).Count') }
+          if ($text.Contains('$isccCandidates[0]')) { $text = $text.Replace('$isccCandidates[0]','@($isccCandidates)[0]') }
+          Set-Content -Path $script -Value $text -Encoding utf8
+          & $script
+          if ($LASTEXITCODE -ne 0) { throw "Installer packaging failed: $LASTEXITCODE" }
+
       - name: Validate Windows 15.6-inch viewport at 1366x768
         shell: pwsh
         run: |
@@ -173,17 +184,6 @@ jobs:
           finally {
             & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop
           }
-
-      - name: Package Windows laptop-fit installer
-        shell: pwsh
-        run: |
-          $script = Join-Path $env:PROJECT_DIR 'build\cloud\package-release.ps1'
-          $text = Get-Content $script -Raw
-          if ($text.Contains('$isccCandidates.Count')) { $text = $text.Replace('$isccCandidates.Count','@($isccCandidates).Count') }
-          if ($text.Contains('$isccCandidates[0]')) { $text = $text.Replace('$isccCandidates[0]','@($isccCandidates)[0]') }
-          Set-Content -Path $script -Value $text -Encoding utf8
-          & $script
-          if ($LASTEXITCODE -ne 0) { throw "Installer packaging failed: $LASTEXITCODE" }
 
       - name: Verify Windows laptop-fit release
         shell: pwsh
