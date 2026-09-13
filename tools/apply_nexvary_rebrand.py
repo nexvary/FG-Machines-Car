@@ -1,5 +1,5 @@
 from pathlib import Path
-import re, sys, struct, zlib, binascii
+import re, sys, struct, zlib, binascii, subprocess
 
 root=Path(sys.argv[1]).resolve()
 if not root.exists(): raise SystemExit(f'REBRAND_ROOT_MISSING {root}')
@@ -102,4 +102,9 @@ for p in root.rglob('*'):
             if n in low: viol.append(f'CONTENT {rel}: {n.decode()}'); break
 if viol:
     print('\n'.join(viol[:100])); raise SystemExit(f'NEXVARY_BRAND_AUDIT_FAIL violations={len(viol)}')
-print(f'NEXVARY_REBRAND_PASS files={changed} replacements={replacements} app=Nexvary forbiddenBrand=0 artwork=Nexvary appId=197C2843-369D-4B91-95C3-E54613706E20')
+
+nav_script=Path(__file__).with_name('apply_navigation_parity_hotfix.py')
+if not nav_script.exists(): raise SystemExit(f'NEXVARY_NAV_HOTFIX_MISSING {nav_script}')
+subprocess.run([sys.executable,str(nav_script),str(root)],check=True)
+
+print(f'NEXVARY_REBRAND_PASS files={changed} replacements={replacements} app=Nexvary forbiddenBrand=0 artwork=Nexvary appId=197C2843-369D-4B91-95C3-E54613706E20 navigationParity=true')
