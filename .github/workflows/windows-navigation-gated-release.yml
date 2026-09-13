@@ -7,6 +7,7 @@ on:
       - stage141-prehardware-coding-core
     paths:
       - 'tools/navigation_integrity_gate.cjs'
+      - 'tools/apply_navigation_integrity_hotfix.py'
       - 'tools/laptop_fit_gate.cjs'
       - 'tools/apply_laptop_156_fit.py'
       - 'tools/apply_runtime_hotfix.py'
@@ -20,6 +21,7 @@ on:
       - main
     paths:
       - 'tools/navigation_integrity_gate.cjs'
+      - 'tools/apply_navigation_integrity_hotfix.py'
       - 'tools/laptop_fit_gate.cjs'
       - '.github/workflows/windows-navigation-gated-release.yml'
 
@@ -68,20 +70,26 @@ jobs:
           New-Item -ItemType Directory -Force -Path (Join-Path $projectDir 'cloud-output') | Out-Null
           Write-Host "WINDOWS_R4_SOURCE_SHA_PASS $actual"
 
-      - name: Apply runtime, semantic UI, Andalusian V3 and Laptop Fit R3
+      - name: Apply runtime, semantic UI, navigation connectivity, Andalusian V3 and Laptop Fit R3
         shell: pwsh
         run: |
           python tools/apply_runtime_hotfix.py "$env:PROJECT_DIR"
           python tools/apply_ui_diversity_hotfix.py "$env:PROJECT_DIR"
+          python tools/apply_navigation_integrity_hotfix.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Navigation connectivity hotfix failed: $LASTEXITCODE" }
           python tools/apply_royal_purple_ui.py "$env:PROJECT_DIR"
           python tools/apply_andalusian_luxe_ui.py "$env:PROJECT_DIR"
           python tools/apply_andalusian_structural_ui.py "$env:PROJECT_DIR"
           python tools/apply_laptop_156_fit.py "$env:PROJECT_DIR"
           if ($LASTEXITCODE -ne 0) { throw "UI transformation failed: $LASTEXITCODE" }
           $css = Get-Content (Join-Path $env:PROJECT_DIR 'native\ui-modern\app.css') -Raw
+          if (-not $css.Contains('FG-NAVIGATION-INTEGRITY-HOTFIX-R1')) { throw 'Navigation hotfix marker missing' }
           if (-not $css.Contains('FG-ANDALUSIAN-STRUCTURAL-V3')) { throw 'Andalusian V3 marker missing' }
           if (-not $css.Contains('FG-LAPTOP-156-FIT-R3')) { throw 'Laptop Fit R3 marker missing' }
-          Write-Host 'WINDOWS_R4_UI_STATIC_GATE_PASS'
+          foreach ($f in @('services.html','about.html')) {
+            if (!(Test-Path (Join-Path $env:PROJECT_DIR "native\ui-modern\$f"))) { throw "Required navigation page missing: $f" }
+          }
+          Write-Host 'WINDOWS_R4_UI_STATIC_GATE_PASS navigation_connectivity=true'
 
       - name: Install Inno Setup
         shell: pwsh
