@@ -95,12 +95,16 @@ jobs:
         shell: pwsh
         run: '& "$env:PROJECT_DIR\build\cloud\build-and-test.ps1"'
 
-      - name: Install browser QA dependencies
+      - name: Install patched browser QA dependencies
         shell: pwsh
         run: |
           Set-Location "$env:PROJECT_DIR\qa\visual"
           npm install --no-audit --no-fund
+          npm install --save-dev --save-exact @playwright/test@1.63.0 playwright@1.63.0 --no-audit --no-fund
           npx playwright install chromium
+          $pw = node -p "require('playwright/package.json').version"
+          if ($pw -ne '1.63.0') { throw "Patched Playwright version not active: $pw" }
+          Write-Host "PATCHED_PLAYWRIGHT_ACTIVE version=$pw"
 
       - name: Known dependency vulnerability gate
         shell: pwsh
