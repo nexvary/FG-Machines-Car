@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - 'tools/apply_nexvary_rebrand.py'
+      - 'tools/apply_locale_boot_hotfix.py'
       - '.github/workflows/nexvary-release.yml'
 
 permissions:
@@ -46,6 +47,9 @@ jobs:
 
       - name: Clone identity to Nexvary and enforce zero legacy brand
         run: python3 tools/apply_nexvary_rebrand.py "$PROJECT_DIR"
+
+      - name: Apply pre-paint locale boot guard
+        run: python3 tools/apply_locale_boot_hotfix.py "$PROJECT_DIR"
 
       - name: Install Linux QA dependencies
         run: |
@@ -115,6 +119,12 @@ jobs:
         run: |
           python tools/apply_nexvary_rebrand.py "$env:PROJECT_DIR"
           if ($LASTEXITCODE -ne 0) { throw "Nexvary rebrand gate failed: $LASTEXITCODE" }
+
+      - name: Apply pre-paint locale boot guard
+        shell: pwsh
+        run: |
+          python tools/apply_locale_boot_hotfix.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Locale boot guard failed: $LASTEXITCODE" }
 
       - name: Install Inno Setup
         shell: pwsh
@@ -192,14 +202,12 @@ jobs:
           $out=Join-Path $env:PROJECT_DIR 'cloud-output'
           $bad=@()
 
-          # File and directory names are always checked. A legacy branded path is never allowed.
           foreach($root in @($out,$installed)){
             Get-ChildItem -Path $root -Recurse -Force | ForEach-Object {
               if($_.Name -match '(?i)FG[-_ ]?Machines|FGMachines'){$bad += "PATH $($_.FullName)"}
             }
           }
 
-          # Text/configuration/UI payload is scanned as text. This is what can be shown to users or consumed as product metadata.
           $textExtensions=@('.html','.htm','.js','.css','.json','.txt','.md','.xml','.ini','.cfg','.conf','.csv','.yml','.yaml','.iss','.ps1','.bat','.cmd')
           foreach($root in @($out,$installed)){
             Get-ChildItem -Path $root -Recurse -File | Where-Object { $textExtensions -contains $_.Extension.ToLowerInvariant() } | ForEach-Object {
@@ -208,7 +216,6 @@ jobs:
             }
           }
 
-          # First-party executable identity is checked both through Windows version metadata and raw strings.
           $exe=Join-Path $installed 'Nexvary.exe'
           if(!(Test-Path $exe)){$bad += 'MISSING Nexvary.exe'}else{
             $vi=(Get-Item $exe).VersionInfo
@@ -220,9 +227,6 @@ jobs:
             if($ascii -match $forbidden -or $utf16 -match $forbidden){$bad += 'EXE_CONTENT Nexvary.exe'}
           }
 
-          # Installer branding is checked via filename and Windows version metadata. We intentionally do not raw-scan the
-          # compressed installer or third-party DLL byte streams because compression/crypto data can coincidentally contain
-          # arbitrary ASCII sequences; installed first-party/UI content is already audited above.
           $setup=Join-Path $out 'Nexvary-Setup.exe'
           if(!(Test-Path $setup)){$bad += 'MISSING Nexvary-Setup.exe'}else{
             $svi=(Get-Item $setup).VersionInfo
