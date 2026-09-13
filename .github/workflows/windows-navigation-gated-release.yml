@@ -158,6 +158,21 @@ jobs:
       - name: Package Windows R4 installer only after all gates pass
         shell: pwsh
         run: |
+          $out = Join-Path $env:PROJECT_DIR 'cloud-output'
+          $stash = Join-Path $env:GITHUB_WORKSPACE 'windows-r4-gate-stash'
+          New-Item -ItemType Directory -Force -Path $stash | Out-Null
+          $gateArtifacts = @(
+            'FG-Machines-Car-Windows-Laptop-R4-1366x768.png',
+            'FG-Machines-Car-Windows-Module-R4-1366x768.png',
+            'NAVIGATION-INTEGRITY-REPORT.json'
+          )
+          foreach ($name in $gateArtifacts) {
+            $src = Join-Path $out $name
+            if (!(Test-Path $src)) { throw "Pre-package gate artifact missing: $src" }
+            Copy-Item $src (Join-Path $stash $name) -Force
+          }
+          Write-Host 'WINDOWS_R4_GATE_ARTIFACT_STASH_PASS count=3'
+
           $script = Join-Path $env:PROJECT_DIR 'build\cloud\package-release.ps1'
           $text = Get-Content $script -Raw
           if ($text.Contains('$isccCandidates.Count')) { $text = $text.Replace('$isccCandidates.Count','@($isccCandidates).Count') }
@@ -165,6 +180,15 @@ jobs:
           Set-Content -Path $script -Value $text -Encoding utf8
           & $script
           if ($LASTEXITCODE -ne 0) { throw "Installer packaging failed: $LASTEXITCODE" }
+
+          foreach ($name in $gateArtifacts) {
+            $saved = Join-Path $stash $name
+            $dst = Join-Path $out $name
+            if (!(Test-Path $saved)) { throw "Stashed gate artifact missing: $saved" }
+            Copy-Item $saved $dst -Force
+            if (!(Test-Path $dst)) { throw "Gate artifact restore failed: $dst" }
+          }
+          Write-Host 'WINDOWS_R4_GATE_ARTIFACT_HANDOFF_PASS count=3'
 
       - name: Verify gated Windows R4 release
         shell: pwsh
