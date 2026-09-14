@@ -1,0 +1,239 @@
+name: FG Machines Car Windows R4 Navigation Gated Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stage141-prehardware-coding-core
+    paths:
+      - 'tools/navigation_integrity_gate.cjs'
+      - 'tools/apply_navigation_integrity_hotfix.py'
+      - 'tools/laptop_fit_gate.cjs'
+      - 'tools/apply_laptop_156_fit.py'
+      - 'tools/apply_runtime_hotfix.py'
+      - 'tools/apply_ui_diversity_hotfix.py'
+      - 'tools/apply_royal_purple_ui.py'
+      - 'tools/apply_andalusian_luxe_ui.py'
+      - 'tools/apply_andalusian_structural_ui.py'
+      - '.github/workflows/windows-navigation-gated-release.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tools/navigation_integrity_gate.cjs'
+      - 'tools/apply_navigation_integrity_hotfix.py'
+      - 'tools/laptop_fit_gate.cjs'
+      - '.github/workflows/windows-navigation-gated-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fg-windows-r4-navigation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  STAGE140_ARCHIVE_SHA256: 11448329307471388b7d49545900c8472055db18f6e4ed495f328108252898cc
+  STAGE140_PROJECT_DIRNAME: FG-Machines-Car-Stage140000-CLOUD-RELEASE
+
+jobs:
+  windows-r4:
+    name: Windows R4 + Navigation Integrity Gate + 1366x768 + Installer
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reassemble and verify Stage 140000 source
+        shell: pwsh
+        run: |
+          python tools/reassemble_stage140.py `
+            --parts-dir stage140_transport_release `
+            --archive Stage140000-CLOUD-V5.tar.xz `
+            --extract-dir stage140-src
+          if ($LASTEXITCODE -ne 0) { throw "Transport reassembly failed: $LASTEXITCODE" }
+          $projectDir = Join-Path $env:GITHUB_WORKSPACE "stage140-src\$env:STAGE140_PROJECT_DIRNAME"
+          "PROJECT_DIR=$projectDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $actual = (Get-FileHash "Stage140000-CLOUD-V5.tar.xz" -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $env:STAGE140_ARCHIVE_SHA256) { throw "Archive SHA256 mismatch: $actual" }
+          New-Item -ItemType Directory -Force -Path (Join-Path $projectDir 'cloud-output') | Out-Null
+          Write-Host "WINDOWS_R4_SOURCE_SHA_PASS $actual"
+
+      - name: Apply runtime, semantic UI, navigation connectivity, Andalusian V3 and Laptop Fit R3
+        shell: pwsh
+        run: |
+          python tools/apply_runtime_hotfix.py "$env:PROJECT_DIR"
+          python tools/apply_ui_diversity_hotfix.py "$env:PROJECT_DIR"
+          python tools/apply_navigation_integrity_hotfix.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "Navigation connectivity hotfix failed: $LASTEXITCODE" }
+          python tools/apply_royal_purple_ui.py "$env:PROJECT_DIR"
+          python tools/apply_andalusian_luxe_ui.py "$env:PROJECT_DIR"
+          python tools/apply_andalusian_structural_ui.py "$env:PROJECT_DIR"
+          python tools/apply_laptop_156_fit.py "$env:PROJECT_DIR"
+          if ($LASTEXITCODE -ne 0) { throw "UI transformation failed: $LASTEXITCODE" }
+          $css = Get-Content (Join-Path $env:PROJECT_DIR 'native\ui-modern\app.css') -Raw
+          if (-not $css.Contains('FG-NAVIGATION-INTEGRITY-HOTFIX-R1')) { throw 'Navigation hotfix marker missing' }
+          if (-not $css.Contains('FG-ANDALUSIAN-STRUCTURAL-V3')) { throw 'Andalusian V3 marker missing' }
+          if (-not $css.Contains('FG-LAPTOP-156-FIT-R3')) { throw 'Laptop Fit R3 marker missing' }
+          foreach ($f in @('services.html','about.html')) {
+            if (!(Test-Path (Join-Path $env:PROJECT_DIR "native\ui-modern\$f"))) { throw "Required navigation page missing: $f" }
+          }
+          Write-Host 'WINDOWS_R4_UI_STATIC_GATE_PASS navigation_connectivity=true'
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Prepare pinned vcpkg
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\prepare-vcpkg.ps1"'
+
+      - name: Build + 40 native tests + self-test
+        shell: pwsh
+        run: '& "$env:PROJECT_DIR\build\cloud\build-and-test.ps1"'
+
+      - name: Install patched browser QA dependencies
+        shell: pwsh
+        run: |
+          Set-Location "$env:PROJECT_DIR\qa\visual"
+          npm install --no-audit --no-fund
+          npm install --save-dev --save-exact @playwright/test@1.63.0 playwright@1.63.0 --no-audit --no-fund
+          npx playwright install chromium
+          $pw = node -p "require('playwright/package.json').version"
+          if ($pw -ne '1.63.0') { throw "Patched Playwright version not active: $pw" }
+          Write-Host "PATCHED_PLAYWRIGHT_ACTIVE version=$pw"
+
+      - name: Known dependency vulnerability gate
+        shell: pwsh
+        run: |
+          Set-Location "$env:PROJECT_DIR\qa\visual"
+          npm audit --audit-level=high
+          if ($LASTEXITCODE -ne 0) { throw "Known high/critical npm vulnerability detected" }
+          Write-Host 'KNOWN_DEPENDENCY_VULNERABILITY_GATE_PASS high_or_critical=0'
+
+      - name: Visual QA + Navigation Integrity Gate + Laptop Fit Gate
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:PROJECT_DIR 'cloud-output'
+          & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" start
+          try {
+            Set-Location "$env:PROJECT_DIR\qa\visual"
+
+            npx playwright test
+            if ($LASTEXITCODE -ne 0) { throw "Playwright Visual QA failed: $LASTEXITCODE" }
+
+            $env:FG_QA_URL = 'http://127.0.0.1:43890/'
+            $env:FG_UI_ROOT = Join-Path $env:PROJECT_DIR 'native\ui-modern'
+            $env:FG_NAV_REPORT = Join-Path $out 'NAVIGATION-INTEGRITY-REPORT.json'
+            node "$env:GITHUB_WORKSPACE\tools\navigation_integrity_gate.cjs"
+            if ($LASTEXITCODE -ne 0) { throw "Navigation Integrity Gate failed: $LASTEXITCODE" }
+
+            $report = Get-Content $env:FG_NAV_REPORT -Raw | ConvertFrom-Json
+            if (-not $report.summary.pass) { throw 'Navigation report did not pass' }
+            if ($report.summary.orphanPages -ne 0) { throw "Orphan pages detected: $($report.summary.orphanPages)" }
+            if ($report.summary.brokenHttpLinks -ne 0) { throw "Broken links detected: $($report.summary.brokenHttpLinks)" }
+
+            $env:FG_LAPTOP_OUT = $out
+            $env:FG_LAPTOP_PREFIX = 'FG-Machines-Car-Windows'
+            node "$env:GITHUB_WORKSPACE\tools\laptop_fit_gate.cjs"
+            if ($LASTEXITCODE -ne 0) { throw "1366x768 Laptop Fit Gate failed: $LASTEXITCODE" }
+
+            Write-Host "NAVIGATION_INTEGRITY_GATE_PASS pages=$($report.summary.pagesVisited) links=$($report.summary.internalLinkOccurrences) unique=$($report.summary.uniqueInternalTargets) clicked=$($report.summary.uniqueTargetsClicked)"
+          }
+          finally {
+            & "$env:PROJECT_DIR\build\cloud\qa-server.ps1" stop
+          }
+
+      - name: Package Windows R4 installer only after all gates pass
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:PROJECT_DIR 'cloud-output'
+          $stash = Join-Path $env:GITHUB_WORKSPACE 'windows-r4-gate-stash'
+          New-Item -ItemType Directory -Force -Path $stash | Out-Null
+          $gateArtifacts = @(
+            'FG-Machines-Car-Windows-Laptop-R4-1366x768.png',
+            'FG-Machines-Car-Windows-Module-R4-1366x768.png',
+            'NAVIGATION-INTEGRITY-REPORT.json'
+          )
+          foreach ($name in $gateArtifacts) {
+            $src = Join-Path $out $name
+            if (!(Test-Path $src)) { throw "Pre-package gate artifact missing: $src" }
+            Copy-Item $src (Join-Path $stash $name) -Force
+          }
+          Write-Host 'WINDOWS_R4_GATE_ARTIFACT_STASH_PASS count=3'
+
+          $script = Join-Path $env:PROJECT_DIR 'build\cloud\package-release.ps1'
+          $text = Get-Content $script -Raw
+          if ($text.Contains('$isccCandidates.Count')) { $text = $text.Replace('$isccCandidates.Count','@($isccCandidates).Count') }
+          if ($text.Contains('$isccCandidates[0]')) { $text = $text.Replace('$isccCandidates[0]','@($isccCandidates)[0]') }
+          Set-Content -Path $script -Value $text -Encoding utf8
+          & $script
+          if ($LASTEXITCODE -ne 0) { throw "Installer packaging failed: $LASTEXITCODE" }
+
+          foreach ($name in $gateArtifacts) {
+            $saved = Join-Path $stash $name
+            $dst = Join-Path $out $name
+            if (!(Test-Path $saved)) { throw "Stashed gate artifact missing: $saved" }
+            Copy-Item $saved $dst -Force
+            if (!(Test-Path $dst)) { throw "Gate artifact restore failed: $dst" }
+          }
+          Write-Host 'WINDOWS_R4_GATE_ARTIFACT_HANDOFF_PASS count=3'
+
+      - name: Verify gated Windows R4 release
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:PROJECT_DIR 'cloud-output'
+          $setup = Join-Path $out 'FG-Machines-Car-Setup.exe'
+          $homeShot = Join-Path $out 'FG-Machines-Car-Windows-Laptop-R4-1366x768.png'
+          $moduleShot = Join-Path $out 'FG-Machines-Car-Windows-Module-R4-1366x768.png'
+          $navReport = Join-Path $out 'NAVIGATION-INTEGRITY-REPORT.json'
+          foreach ($f in @($setup,$homeShot,$moduleShot,$navReport)) { if (!(Test-Path $f)) { throw "Release file missing: $f" } }
+          $report = Get-Content $navReport -Raw | ConvertFrom-Json
+          if (-not $report.summary.pass) { throw 'Navigation Integrity Gate report is not PASS' }
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+          "$hash  FG-Machines-Car-Setup.exe" | Set-Content (Join-Path $out 'WINDOWS-R4-SHA256SUMS.txt') -Encoding ascii
+          @"
+          FG Machines Car - Windows Laptop Fit R4 Navigation Gated
+          Target viewport: 1366x768 strict PASS required
+          Navigation Integrity Gate: PASS required before packaging
+          Home / Services / About: real click validation required
+          Every HTML page: reachable from navigation graph required
+          Every internal link: HTTP validation required
+          Every unique internal page target: real click validation required
+          Orphan/disconnected pages: 0 required
+          Broken internal links: 0 required
+          Browser page exceptions/console errors: 0 required
+          Unsafe javascript/vbscript/file navigation: 0 required
+          Known high/critical npm dependency vulnerabilities: 0 required
+          Native tests: 40/40 PASS required
+          Hardware/vehicle validation: not claimed
+          SHA256: $hash
+          "@ | Set-Content (Join-Path $out 'WINDOWS-R4-RELEASE.txt') -Encoding utf8
+          Write-Host "WINDOWS_R4_GATED_RELEASE_PASS SHA256=$hash"
+
+      - name: Upload Windows R4 gated release
+        uses: actions/upload-artifact@v4
+        with:
+          name: FG-Machines-Car-Windows-Laptop-Fit-R4-Navigation-Gated
+          path: |
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Setup.exe
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Windows-Laptop-R4-1366x768.png
+            ${{ env.PROJECT_DIR }}/cloud-output/FG-Machines-Car-Windows-Module-R4-1366x768.png
+            ${{ env.PROJECT_DIR }}/cloud-output/NAVIGATION-INTEGRITY-REPORT.json
+            ${{ env.PROJECT_DIR }}/cloud-output/visual-qa-screenshots.zip
+            ${{ env.PROJECT_DIR }}/cloud-output/WINDOWS-R4-RELEASE.txt
+            ${{ env.PROJECT_DIR }}/cloud-output/WINDOWS-R4-SHA256SUMS.txt
+            ${{ env.PROJECT_DIR }}/qa/visual/test-results/junit.xml
+          if-no-files-found: error
+          retention-days: 14

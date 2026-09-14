@@ -1,0 +1,48 @@
+name: FG Pre-Hardware Coding Core
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - stage141-prehardware-coding-core
+    paths:
+      - 'prehardware/**'
+      - '.github/workflows/prehardware-coding-core.yml'
+  pull_request:
+    paths:
+      - 'prehardware/**'
+      - '.github/workflows/prehardware-coding-core.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux pre-hardware core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S prehardware -B prehardware/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build prehardware/build --parallel 4
+      - name: Test
+        run: ctest --test-dir prehardware/build --output-on-failure
+
+  windows:
+    name: Windows pre-hardware core
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure
+        shell: pwsh
+        run: cmake -S prehardware -B prehardware/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        shell: pwsh
+        run: cmake --build prehardware/build --parallel 4
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir prehardware/build --output-on-failure
